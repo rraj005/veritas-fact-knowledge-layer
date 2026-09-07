@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "veritas"
+version = "0.1.0"
+description = "Domain-agnostic RAG fact knowledge layer"
+requires-python = ">=3.12"
+dependencies = [
+    "pymupdf",
+    "pdfplumber",
+    "openai",
+    "sentence-transformers",
+    "chromadb",
+    "fastapi",
+    "python-multipart",
+    "uvicorn[standard]",
+    "pint",
+    "python-dotenv",
+    "pydantic",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
