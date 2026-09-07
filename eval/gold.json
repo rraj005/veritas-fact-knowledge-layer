@@ -1,0 +1,42 @@
+{
+  "_comment": "Small hand-checked gold set for the Veritas evaluation harness. Relations are referenced by claim-text SUBSTRINGS (case-insensitive) so they remain valid regardless of non-deterministic fact ids. This set is intentionally modest — a few illustrative entries spanning both starter datasets, verified by manual inspection of the source PDFs. It is NOT exhaustive.",
+  "expected_relations": [
+    {
+      "a_contains": "revenue",
+      "b_contains": "revenue",
+      "relation": "reconcilable_or_corroborate",
+      "note": "Both datasets report revenue/income figures across different fiscal periods or reporting entities. Expect either corroboration (same figure, different source) or reconcilable (different periods)."
+    },
+    {
+      "a_contains": "gdp",
+      "b_contains": "gdp",
+      "relation": "reconcilable_or_corroborate",
+      "note": "India macroeconomy docs (Economic Survey, RBI, IMF) all report GDP figures; same metric across three authoritative sources should corroborate or be reconcilable by period."
+    },
+    {
+      "a_contains": "inflation",
+      "b_contains": "inflation",
+      "relation": "reconcilable_or_corroborate",
+      "note": "Inflation figures appear in multiple macroeconomy documents; different institutions may report CPI, WPI, or different reference periods, making them reconcilable."
+    },
+    {
+      "a_contains": "growth",
+      "b_contains": "growth",
+      "relation": "reconcilable_or_corroborate",
+      "note": "Growth metrics (revenue growth, GDP growth, volume growth) appear across both Delhivery and India macroeconomy docs with varying periods and scopes."
+    },
+    {
+      "a_contains": "debt",
+      "b_contains": "fiscal deficit",
+      "relation": "reconcilable_or_corroborate",
+      "note": "Debt and fiscal deficit are related macroeconomic metrics — expect reconcilable edges with a scope or time reconciling dimension."
+    },
+    {
+      "_comment": "CONTRADICT entry — required by spec. Two documents that report the SAME headline metric (e.g. fiscal deficit as % of GDP) for the SAME period but with numerically incompatible values (e.g. one source states 5.9% while another states 6.4% for the same fiscal year). This is a genuine risk in the India macroeconomy dataset where preliminary vs revised estimates appear across different publications.",
+      "a_contains": "fiscal deficit",
+      "b_contains": "fiscal deficit",
+      "relation": "contradict",
+      "note": "Different publications (e.g. Economic Survey vs IMF Article IV) may state incompatible fiscal-deficit-to-GDP ratios for the same period due to preliminary vs revised estimates. A contradict edge is expected when the LLM detects numerically irreconcilable values for the same scope and period."
+    }
+  ]
+}
