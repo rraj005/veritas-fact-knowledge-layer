@@ -1,0 +1,34 @@
+# Render Blueprint — deploys Veritas as a SINGLE web service.
+# The FastAPI app serves BOTH the REST API and the web UI (static files),
+# so no separate frontend service is required.
+#
+# Notes:
+#  - `plan: standard` (2 GB) is recommended: sentence-transformers pulls in
+#    PyTorch and needs ~1 GB RAM to load the embedding model. The free/starter
+#    (512 MB) tiers will likely OOM. Change the `plan:` line to try a smaller
+#    tier, or switch to a lighter ONNX embedding backend first.
+#  - The `disk:` block gives the SQLite + Chroma data a persistent home so the
+#    knowledge layer survives restarts. Remove it (and VERITAS_DATA_DIR) if you
+#    want an ephemeral demo on a cheaper/free plan.
+#  - No API keys here: the LLM is BYOK, entered by the user at runtime in the UI.
+services:
+  - type: web
+    name: veritas-fact-knowledge-layer
+    runtime: python
+    plan: standard
+    healthCheckPath: /health
+    autoDeploy: true
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -e .
+      python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+    startCommand: uvicorn veritas.api.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: VERITAS_DATA_DIR
+        value: /var/data
+    disk:
+      name: veritas-data
+      mountPath: /var/data
+      sizeGB: 1
