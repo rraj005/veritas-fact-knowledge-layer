@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Veritas — Fact Knowledge Layer</title>
+  <meta name="description" content="A domain-agnostic RAG system for grounded fact extraction, cross-document relationship detection, and cited Q&A." />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+  <!-- ===================== TOP BAR ===================== -->
+  <header id="topbar">
+    <div class="topbar-brand">
+      <span class="topbar-logo">Veritas</span>
+      <span class="topbar-tagline">Fact Knowledge Layer</span>
+    </div>
+
+    <div class="topbar-spacer"></div>
+
+    <div id="llm-topbar-status" class="llm-topbar-status" aria-live="polite" aria-label="LLM status">
+      <span class="llm-status-dot llm-status-dot--off" id="llm-status-dot"></span>
+      <span class="llm-status-text" id="llm-status-text">LLM not configured</span>
+    </div>
+
+    <div class="health-counts">
+      <span class="health-dot" title="Backend online"></span>
+
+      <span class="health-count">
+        <span class="num" id="count-docs">—</span>
+        <span class="label">docs</span>
+      </span>
+
+      <span class="health-count">
+        <span class="num" id="count-facts">—</span>
+        <span class="label">facts</span>
+      </span>
+
+      <span class="health-count">
+        <span class="num" id="count-edges">—</span>
+        <span class="label">edges</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- ===================== SHELL ===================== -->
+  <div class="app-shell">
+
+    <!-- ====== SIDEBAR NAV ====== -->
+    <nav id="sidenav" aria-label="Primary navigation">
+      <button class="nav-item active" data-view="view-llm-setup">
+        <span class="nav-icon">⚙</span>
+        LLM Setup
+      </button>
+      <button class="nav-item" data-view="view-upload">
+        <span class="nav-icon">↑</span>
+        Upload
+      </button>
+      <button class="nav-item" data-view="view-facts">
+        <span class="nav-icon">≡</span>
+        Facts
+      </button>
+      <button class="nav-item" data-view="view-relationships">
+        <span class="nav-icon">⇄</span>
+        Relationships
+      </button>
+      <button class="nav-item" data-view="view-cases">
+        <span class="nav-icon">◈</span>
+        Four Cases
+      </button>
+      <button class="nav-item" data-view="view-ask">
+        <span class="nav-icon">?</span>
+        Ask
+      </button>
+    </nav>
+
+    <!-- ====== MAIN CONTENT ====== -->
+    <main id="main">
+
+      <!-- ============================================================
+           VIEW: LLM SETUP
+           ============================================================ -->
+      <section id="view-llm-setup" class="view active" aria-labelledby="llm-setup-title">
+        <h1 class="view-title" id="llm-setup-title">LLM Setup</h1>
+        <p class="view-subtitle">
+          Connect an LLM provider to enable fact extraction, relationship detection,
+          and cited Q&amp;A. No API keys are stored or committed.
+        </p>
+
+        <!-- Step 1: Provider select + credentials -->
+        <div class="llm-setup-flow">
+
+          <div class="card llm-card">
+            <div class="card-header">
+              <span class="llm-step-badge">1</span>
+              <span class="card-title">Choose Provider &amp; Connect</span>
+            </div>
+
+            <div class="llm-field-group">
+              <label class="filter-label" for="llm-provider-select">Provider</label>
+              <select id="llm-provider-select" aria-label="Select LLM provider">
+                <option value="openai">OpenAI</option>
+                <option value="ollama">Ollama (local)</option>
+              </select>
+            </div>
+
+            <!-- OpenAI fields -->
+            <div id="llm-openai-fields" class="llm-provider-fields">
+              <div class="llm-field-group">
+                <label class="filter-label" for="llm-api-key">API Key</label>
+                <input
+                  type="password"
+                  id="llm-api-key"
+                  placeholder="sk-..."
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </div>
+              <p class="llm-note">
+                Used only in-memory for this session — never stored or committed.
+              </p>
+            </div>
+
+            <!-- Ollama fields -->
+            <div id="llm-ollama-fields" class="llm-provider-fields" hidden>
+              <div class="llm-field-group">
+                <label class="filter-label" for="llm-base-url">Base URL</label>
+                <input
+                  type="text"
+                  id="llm-base-url"
+                  value="http://localhost:11434"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </div>
+              <p class="llm-note">No API key required for Ollama.</p>
+            </div>
+
+            <div class="llm-actions">
+              <button type="button" class="btn btn-primary" id="llm-connect-btn">
+                Connect
+              </button>
+            </div>
+
+            <div id="llm-connect-error" class="llm-inline-error" hidden></div>
+          </div>
+
+          <!-- Step 2: Model selection (revealed after connect) -->
+          <div class="card llm-card" id="llm-model-card" hidden>
+            <div class="card-header">
+              <span class="llm-step-badge">2</span>
+              <span class="card-title">Select Model</span>
+            </div>
+
+            <div class="llm-field-group">
+              <label class="filter-label" for="llm-model-select">Available Models</label>
+              <select id="llm-model-select" aria-label="Select model"></select>
+            </div>
+
+            <div class="llm-actions">
+              <button type="button" class="btn btn-primary" id="llm-select-btn">
+                Use this model
+              </button>
+            </div>
+
+            <div id="llm-select-error" class="llm-inline-error" hidden></div>
+          </div>
+
+        </div><!-- /.llm-setup-flow -->
+      </section>
+
+      <!-- ============================================================
+           VIEW: UPLOAD
+           ============================================================ -->
+      <section id="view-upload" class="view" aria-labelledby="upload-title">
+        <h1 class="view-title" id="upload-title">Upload Document</h1>
+        <p class="view-subtitle">
+          Drop a PDF below. Veritas will parse, extract grounded facts, and
+          detect cross-document relationships automatically.
+        </p>
+
+        <div id="upload-llm-banner" class="llm-banner" hidden>
+          <span id="upload-llm-banner-default">Configure an LLM in <strong>LLM Setup</strong> first to enable document ingestion.</span>
+          <span id="upload-llm-banner-model" hidden>Select a model in LLM Setup to enable this feature.</span>
+        </div>
+
+        <div id="drop-zone" role="button" tabindex="0"
+             aria-label="Upload area — drag and drop or click to select a PDF">
+          <input
+            type="file"
+            id="file-input"
+            class="file-input-hidden"
+            accept="application/pdf,.pdf"
+            aria-hidden="true"
+            tabindex="-1"
+          />
+          <span class="drop-icon">📄</span>
+          <p class="drop-title">Drop your PDF here</p>
+          <p class="drop-hint">or click to browse files</p>
+          <button type="button" class="btn btn-primary" tabindex="-1" aria-hidden="true">
+            Select PDF
+          </button>
+        </div>
+
+        <!-- Progress card -->
+        <div id="progress-wrap" class="progress-wrap" role="status" aria-live="polite">
+          <div class="progress-header">
+            <span class="progress-filename" id="progress-filename">—</span>
+            <span class="progress-pct" id="progress-pct">0%</span>
+          </div>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="progress-bar-fill"></div>
+          </div>
+          <p class="progress-stage" id="progress-stage">Waiting…</p>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           VIEW: FACTS
+           ============================================================ -->
+      <section id="view-facts" class="view" aria-labelledby="facts-title">
+        <h1 class="view-title" id="facts-title">Extracted Facts</h1>
+        <p class="view-subtitle">
+          Every fact is grounded to a verbatim evidence span and page number.
+          Click any row to inspect the source text.
+        </p>
+
+        <!-- Filters -->
+        <div class="filter-bar">
+          <div class="filter-group">
+            <label class="filter-label" for="fact-filter-doc">Doc ID</label>
+            <input type="text" id="fact-filter-doc" placeholder="Filter by doc_id…" />
+          </div>
+          <div class="filter-group" style="min-width:140px;">
+            <label class="filter-label" for="fact-filter-kind">Kind</label>
+            <select id="fact-filter-kind">
+              <option value="">All kinds</option>
+              <option value="numerical">Numerical</option>
+              <option value="semantic">Semantic</option>
+            </select>
+          </div>
+          <div class="filter-group" style="min-width:160px;">
+            <label class="filter-label" for="fact-filter-conf">Min confidence</label>
+            <input type="text" id="fact-filter-conf" placeholder="e.g. 0.8" />
+          </div>
+          <button type="button" class="btn btn-primary" id="facts-apply-filters">
+            Apply
+          </button>
+        </div>
+
+        <!-- Table -->
+        <div id="facts-table-wrap"></div>
+      </section>
+
+      <!-- ============================================================
+           VIEW: RELATIONSHIPS
+           ============================================================ -->
+      <section id="view-relationships" class="view" aria-labelledby="rels-title">
+        <h1 class="view-title" id="rels-title">Cross-Document Relationships</h1>
+        <p class="view-subtitle">
+          Each card shows both source claims with verbatim evidence, the
+          detected relation, and the system's reasoning.
+        </p>
+
+        <!-- Filters -->
+        <div class="filter-bar">
+          <div class="filter-group">
+            <label class="filter-label" for="rel-filter-type">Relation type</label>
+            <select id="rel-filter-type">
+              <option value="">All types</option>
+              <option value="corroborate">Corroborate</option>
+              <option value="contradict">Contradict</option>
+              <option value="reconcilable">Reconcilable</option>
+            </select>
+          </div>
+          <button type="button" class="btn btn-primary" id="rels-apply-filter">
+            Apply
+          </button>
+        </div>
+
+        <div id="rels-container"></div>
+      </section>
+
+      <!-- ============================================================
+           VIEW: FOUR CASES
+           ============================================================ -->
+      <section id="view-cases" class="view" aria-labelledby="cases-title">
+        <h1 class="view-title" id="cases-title">The Four Cases</h1>
+        <p class="view-subtitle">
+          Veritas classifies every cross-document fact pair into one of four
+          epistemic cases. Each panel shows a representative example with
+          verbatim evidence and system reasoning.
+        </p>
+
+        <div class="cases-grid" id="cases-grid">
+          <div class="state-loading">Loading cases…</div>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           VIEW: ASK
+           ============================================================ -->
+      <section id="view-ask" class="view" aria-labelledby="ask-title">
+        <h1 class="view-title" id="ask-title">Ask Veritas</h1>
+        <p class="view-subtitle">
+          Ask any question — the answer is grounded to verbatim evidence spans
+          retrieved from the knowledge layer. No hallucinations without citations.
+        </p>
+
+        <div id="ask-llm-banner" class="llm-banner" hidden>
+          <span id="ask-llm-banner-default">Configure an LLM in <strong>LLM Setup</strong> first to enable Q&amp;A.</span>
+          <span id="ask-llm-banner-model" hidden>Select a model in LLM Setup to enable this feature.</span>
+        </div>
+
+        <form class="ask-form" id="ask-form" novalidate>
+          <div class="filter-group" style="min-width:100%;">
+            <label class="filter-label" for="ask-question">Your question</label>
+            <textarea
+              id="ask-question"
+              placeholder="e.g. What was the reported revenue across all documents?"
+              rows="3"
+            ></textarea>
+          </div>
+          <div>
+            <button type="submit" class="btn btn-primary" id="ask-submit">
+              Ask
+            </button>
+          </div>
+        </form>
+
+        <div id="ask-answer" class="ask-answer">
+          <div class="answer-text" id="answer-text"></div>
+          <div id="citations-wrap"></div>
+        </div>
+      </section>
+
+    </main><!-- /#main -->
+
+  </div><!-- /.app-shell -->
+
+  <!-- ============================================================
+       FACT DETAIL PANEL (slide-in overlay)
+       ============================================================ -->
+  <aside
+    id="fact-detail-panel"
+    class="detail-panel"
+    role="complementary"
+    aria-label="Fact detail"
+    aria-hidden="true"
+  >
+    <div class="detail-panel-header">
+      <div class="detail-panel-title" id="detail-title">Fact Detail</div>
+      <button class="close-btn" id="fact-detail-close" aria-label="Close detail panel">
+        ✕
+      </button>
+    </div>
+    <div class="detail-panel-body">
+
+      <!-- Verbatim evidence — first, most prominent -->
+      <div class="detail-field">
+        <span class="detail-field-label">Verbatim Evidence</span>
+        <blockquote class="evidence-block" id="detail-evidence"></blockquote>
+        <div class="evidence-meta">
+          <span class="evidence-meta-item">
+            <strong id="detail-page"></strong>
+          </span>
+          <span class="evidence-meta-item">
+            Doc: <strong id="detail-doc" class="font-mono"></strong>
+          </span>
+        </div>
+      </div>
+
+      <div class="detail-field">
+        <span class="detail-field-label">Claim</span>
+        <span class="detail-field-value" id="detail-claim"></span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="detail-field">
+          <span class="detail-field-label">Subject</span>
+          <span class="detail-field-value" id="detail-subject"></span>
+        </div>
+        <div class="detail-field">
+          <span class="detail-field-label">Attribute</span>
+          <span class="detail-field-value" id="detail-attribute"></span>
+        </div>
+        <div class="detail-field">
+          <span class="detail-field-label">Value / Unit</span>
+          <span class="detail-field-value" id="detail-value"></span>
+        </div>
+        <div class="detail-field">
+          <span class="detail-field-label">Period</span>
+          <span class="detail-field-value" id="detail-period"></span>
+        </div>
+        <div class="detail-field">
+          <span class="detail-field-label">Kind</span>
+          <span class="detail-field-value" id="detail-kind"></span>
+        </div>
+        <div class="detail-field">
+          <span class="detail-field-label">Confidence</span>
+          <span class="detail-field-value" id="detail-confidence"></span>
+        </div>
+      </div>
+
+    </div><!-- /.detail-panel-body -->
+  </aside>
+
+  <script src="/app.js"></script>
+</body>
+</html>
