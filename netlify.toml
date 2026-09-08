@@ -1,0 +1,9 @@
+# Netlify config for the Veritas frontend (static, no build step).
+#
+# The UI is plain HTML/JS/CSS in src/veritas/web. Netlify publishes that folder
+# as the site root. Before deploying, edit src/veritas/web/config.js and set
+# window.VERITAS_API_BASE to your backend URL (the Hugging Face Space), e.g.
+#   window.VERITAS_API_BASE = "https://rraj005-veritas.hf.space";
+[build]
+  publish = "src/veritas/web"
+  command = ""

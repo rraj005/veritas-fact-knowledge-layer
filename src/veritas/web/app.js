@@ -44,9 +44,15 @@ function el(tag, { cls = "", attrs = {}, children = [] } = {}) {
 // ---------------------------------------------------------------------------
 // API helpers
 // ---------------------------------------------------------------------------
+// Backend base URL. Defaults to same-origin (empty string) so the app works
+// when the FastAPI backend serves this UI directly. For a split deployment
+// (e.g. frontend on Netlify, backend on a Hugging Face Space), set
+// window.VERITAS_API_BASE in config.js to the backend URL.
+const API_BASE = (window.VERITAS_API_BASE || "").replace(/\/+$/, "");
+
 const API = {
   async get(path) {
-    const r = await fetch(path);
+    const r = await fetch(API_BASE + path);
     if (!r.ok) throw new Error(`${r.status} ${r.statusText} — ${path}`);
     return r.json();
   },
@@ -59,7 +65,7 @@ const API = {
       opts.headers = { "Content-Type": "application/json" };
       opts.body = JSON.stringify(body);
     }
-    const r = await fetch(path, opts);
+    const r = await fetch(API_BASE + path, opts);
     if (!r.ok) {
       const msg = await r.text().catch(() => r.statusText);
       throw new Error(`${r.status} — ${msg}`);
@@ -787,7 +793,7 @@ function buildCitationCard(cite) {
 // ---------------------------------------------------------------------------
 function triggerDownload(url, filename) {
   const a = document.createElement("a");
-  a.href = url;
+  a.href = API_BASE + url;
   a.download = filename;
   a.rel = "noopener noreferrer";
   document.body.appendChild(a);
@@ -956,7 +962,7 @@ function setLlmStatus(configured, provider, model) {
 // API helper with 400-aware error extraction (returns detail text from body)
 // ---------------------------------------------------------------------------
 async function apiPostRaw(path, body) {
-  const r = await fetch(path, {
+  const r = await fetch(API_BASE + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
