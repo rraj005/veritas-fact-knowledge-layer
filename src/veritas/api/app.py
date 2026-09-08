@@ -26,6 +26,7 @@ from veritas.api.schemas import (
     LLMConfigResponse,
     LLMConnectRequest,
     LLMConnectResponse,
+    LLMProviderInfo,
     LLMSelectRequest,
     LLMSelectResponse,
     RelationshipResponse,
@@ -156,19 +157,19 @@ def build_app(
             return cfg._injected_client  # type: ignore[return-value]
         # Build client from runtime config at request time.
         from veritas.llm.cache import DiskCache
-        from veritas.llm.client import CachedClient, OllamaClient, OpenAIClient
+        from veritas.llm.client import CachedClient, client_for
 
-        provider = cfg.provider
+        provider = cfg.provider or ""
         model = cfg.model or ""
-        if provider == "openai":
-            inner: LLMClient = OpenAIClient(api_key=cfg.api_key or "", model=model)
-        elif provider == "ollama":
-            inner = OllamaClient(model=model, base_url=cfg.base_url)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown provider '{provider}'. Supported: openai, ollama.",
+        try:
+            inner: LLMClient = client_for(
+                provider,
+                model,
+                api_key=cfg.api_key,
+                base_url=cfg.base_url,
             )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         # Wrap with cache if pipeline.settings has a cache_dir
         try:
             cache_dir = pipeline.settings.cache_dir
@@ -321,6 +322,30 @@ def build_app(
             )
         cfg.model = body.model
         return LLMSelectResponse(provider=cfg.provider or "", model=body.model)
+
+    @app.get(
+        "/config/llm/providers",
+        response_model=list[LLMProviderInfo],
+        tags=["config"],
+    )
+    def list_providers() -> list[LLMProviderInfo]:
+        """Return metadata for all supported LLM providers.
+
+        The frontend uses this to dynamically build the provider dropdown and
+        show/hide the API key and base URL fields based on provider requirements.
+        """
+        from veritas.llm.providers import PROVIDERS
+
+        return [
+            LLMProviderInfo(
+                id=p.id,
+                label=p.label,
+                needs_key=p.needs_key,
+                needs_base_url=p.needs_base_url,
+                default_base_url=p.default_base_url,
+            )
+            for p in PROVIDERS
+        ]
 
     # ------------------------------------------------------------------
     # Documents

@@ -975,6 +975,10 @@ async function apiPostRaw(path, body) {
 // VIEW: LLM Setup
 // ---------------------------------------------------------------------------
 
+// Module-level provider metadata fetched once from GET /config/llm/providers.
+// Each entry: { id, label, needs_key, needs_base_url, default_base_url }
+let _providerMeta = [];
+
 // Guard: listeners are bound exactly once, even if the user navigates away
 // and back to the LLM Setup view multiple times.
 let _llmSetupInit = false;
@@ -987,8 +991,8 @@ function initLlmSetup() {
   _llmSetupInit = true;
 
   const providerSelect  = document.getElementById("llm-provider-select");
-  const openaiFields    = document.getElementById("llm-openai-fields");
-  const ollamaFields    = document.getElementById("llm-ollama-fields");
+  const keyFields       = document.getElementById("llm-key-fields");
+  const urlFields       = document.getElementById("llm-url-fields");
   const apiKeyInput     = document.getElementById("llm-api-key");
   const baseUrlInput    = document.getElementById("llm-base-url");
   const connectBtn      = document.getElementById("llm-connect-btn");
@@ -998,43 +1002,87 @@ function initLlmSetup() {
   const selectBtn       = document.getElementById("llm-select-btn");
   const selectError     = document.getElementById("llm-select-error");
 
-  // Toggle provider-specific fields
-  function updateProviderFields() {
-    const isOllama = providerSelect.value === "ollama";
-    openaiFields.hidden = isOllama;
-    ollamaFields.hidden = !isOllama;
+  // Fetch provider list from the backend and build the <select> dynamically.
+  async function loadProviders() {
+    try {
+      const providers = await API.get("/config/llm/providers");
+      _providerMeta = providers;
+      // Clear and rebuild options (XSS-safe via textContent)
+      providerSelect.innerHTML = "";
+      for (const p of providers) {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = p.label;
+        providerSelect.appendChild(opt);
+      }
+      updateProviderFields();
+    } catch {
+      // If the endpoint is unavailable (old server), keep the select empty.
+    }
   }
+
+  // Show/hide key and base-url fields based on the selected provider's metadata.
+  function updateProviderFields() {
+    const selectedId = providerSelect.value;
+    const meta = _providerMeta.find((p) => p.id === selectedId) || {};
+
+    const needsKey     = !!meta.needs_key;
+    const needsBaseUrl = !!meta.needs_base_url;
+
+    keyFields.hidden = !needsKey;
+    urlFields.hidden = !needsBaseUrl;
+
+    // Pre-fill default_base_url when switching to a provider that has one.
+    if (needsBaseUrl && meta.default_base_url) {
+      if (!baseUrlInput.value || _lastProviderDefaultUrl === baseUrlInput.value) {
+        baseUrlInput.value = meta.default_base_url;
+      }
+    } else if (!needsBaseUrl) {
+      // Clear if switching away from a base-url provider.
+      baseUrlInput.value = "";
+    }
+    _lastProviderDefaultUrl = (needsBaseUrl && meta.default_base_url) ? meta.default_base_url : "";
+  }
+
+  // Track the last auto-filled default URL so we don't overwrite user edits.
+  let _lastProviderDefaultUrl = "";
 
   providerSelect.addEventListener("change", updateProviderFields);
-  updateProviderFields();
+
+  // Kick off provider load immediately (async, non-blocking).
+  loadProviders();
 
   // Show inline error (XSS-safe via textContent)
-  function showError(el, msg) {
-    el.hidden = false;
-    el.textContent = String(msg || "Unknown error");
+  function showError(errEl, msg) {
+    errEl.hidden = false;
+    errEl.textContent = String(msg || "Unknown error");
   }
 
-  function hideError(el) {
-    el.hidden = true;
-    el.textContent = "";
+  function hideError(errEl) {
+    errEl.hidden = true;
+    errEl.textContent = "";
   }
 
   // Connect button handler
   connectBtn.addEventListener("click", async () => {
     hideError(connectError);
     const provider = providerSelect.value;
+    const meta = _providerMeta.find((p) => p.id === provider) || {};
 
     const reqBody = { provider };
-    if (provider === "openai") {
-      const key = apiKeyInput.value;
+
+    if (meta.needs_key) {
+      const key = apiKeyInput ? apiKeyInput.value : "";
       if (!key.trim()) {
         showError(connectError, "Please enter an API key.");
         return;
       }
       reqBody.api_key = key;
-    } else {
-      const url = baseUrlInput.value.trim() || "http://localhost:11434";
-      reqBody.base_url = url;
+    }
+
+    if (meta.needs_base_url) {
+      const url = baseUrlInput ? baseUrlInput.value.trim() : "";
+      if (url) reqBody.base_url = url;
     }
 
     connectBtn.disabled = true;
@@ -1172,8 +1220,8 @@ async function refreshLlmStatus() {
         badge.appendChild(strong);
       }
 
-    // State (b): key held by backend, available_models known, but no model selected yet
-    } else if (cfg.has_key && cfg.provider && cfg.available_models && cfg.available_models.length) {
+    // State (b): key/base_url held by backend, available_models known, but no model selected yet
+    } else if ((cfg.has_key || cfg.provider) && cfg.provider && cfg.available_models && cfg.available_models.length) {
       setLlmStatus(false, cfg.provider, null);
 
       // Pre-select provider in the dropdown

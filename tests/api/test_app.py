@@ -583,6 +583,44 @@ def test_connect_llm_sdk_error_does_not_leak_key(tmp_path, tmp_store, tmp_index,
     assert "Failed to connect to the provider" in r.text
 
 
+def test_get_llm_providers_endpoint(client_with_fakes) -> None:
+    """GET /config/llm/providers returns all expected provider ids."""
+    r = client_with_fakes.get("/config/llm/providers")
+    assert r.status_code == 200
+    providers = r.json()
+    assert isinstance(providers, list)
+    ids = [p["id"] for p in providers]
+    for expected in ("openai", "anthropic", "gemini", "openrouter", "ollama", "custom"):
+        assert expected in ids, f"Provider '{expected}' missing from /config/llm/providers"
+    # Each entry must have the required fields
+    for p in providers:
+        assert "id" in p
+        assert "label" in p
+        assert "needs_key" in p
+        assert "needs_base_url" in p
+        assert "default_base_url" in p or p.get("default_base_url") is None
+
+
+def test_get_llm_providers_ollama_has_default_base_url(client_with_fakes) -> None:
+    """GET /config/llm/providers — Ollama entry must have a default_base_url."""
+    r = client_with_fakes.get("/config/llm/providers")
+    providers = {p["id"]: p for p in r.json()}
+    ollama = providers["ollama"]
+    assert ollama["needs_base_url"] is True
+    assert ollama["needs_key"] is False
+    assert ollama["default_base_url"] is not None
+    assert "localhost" in ollama["default_base_url"]
+
+
+def test_get_llm_providers_openai_needs_key(client_with_fakes) -> None:
+    """GET /config/llm/providers — OpenAI entry must need a key and no base_url."""
+    r = client_with_fakes.get("/config/llm/providers")
+    providers = {p["id"]: p for p in r.json()}
+    openai_p = providers["openai"]
+    assert openai_p["needs_key"] is True
+    assert openai_p["needs_base_url"] is False
+
+
 def test_select_model_empty_available_list_returns_400(tmp_path, tmp_store, tmp_index, doc_text) -> None:
     """POST /config/llm/select returns 400 when provider returned no models."""
     import dataclasses

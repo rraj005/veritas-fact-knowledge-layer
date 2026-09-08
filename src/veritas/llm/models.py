@@ -13,16 +13,19 @@ def list_models(
     """Return the list of model ids available to the caller for *provider*.
 
     Args:
-        provider: "openai" or "ollama".
-        api_key:  Required for "openai"; ignored for "ollama".
-        base_url: Optional Ollama base URL (defaults to http://localhost:11434).
+        provider: One of "openai", "ollama", "anthropic", "gemini",
+                  "openrouter", or "custom".
+        api_key:  Required for "openai", "anthropic", "gemini".
+                  Optional for "openrouter". Ignored for "ollama".
+        base_url: Required for "custom". Optional for "ollama"
+                  (defaults to http://localhost:11434).
 
     Returns:
         Sorted list of model id strings.
 
     Raises:
-        RuntimeError: If provider is "openai" and api_key is missing.
-        ValueError:   If provider is unknown.
+        RuntimeError: If a provider requires an api_key and it is missing.
+        ValueError:   If provider is unknown, or "custom" is used without base_url.
     """
     if provider == "openai":
         if not api_key:
@@ -45,6 +48,71 @@ def list_models(
         data = response.json()
         return sorted(m["name"] for m in data.get("models", []))
 
+    if provider == "anthropic":
+        if not api_key:
+            raise RuntimeError(
+                "An Anthropic API key is required to list models. "
+                "Provide api_key or set ANTHROPIC_API_KEY."
+            )
+        import httpx  # lazy import
+
+        response = httpx.get(
+            "https://api.anthropic.com/v1/models",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return sorted(m["id"] for m in data.get("data", []))
+
+    if provider == "gemini":
+        if not api_key:
+            raise RuntimeError(
+                "A Gemini API key is required to list models. "
+                "Provide api_key or set GEMINI_API_KEY."
+            )
+        import httpx  # lazy import
+
+        response = httpx.get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+        )
+        response.raise_for_status()
+        data = response.json()
+        models = [
+            m["name"].removeprefix("models/")
+            for m in data.get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+        ]
+        return sorted(models)
+
+    if provider == "openrouter":
+        import httpx  # lazy import
+
+        headers: dict[str, str] = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        response = httpx.get("https://openrouter.ai/api/v1/models", headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        return sorted(m["id"] for m in data.get("data", []))
+
+    if provider == "custom":
+        if not base_url:
+            raise ValueError(
+                "A base_url is required for the 'custom' provider. "
+                "Provide the base URL of your OpenAI-compatible endpoint."
+            )
+        import httpx  # lazy import
+
+        url = base_url.rstrip("/") + "/models"
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        response = httpx.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        return sorted(m["id"] for m in data.get("data", []))
+
     raise ValueError(
-        f"Unknown provider '{provider}'. Supported providers: openai, ollama."
+        f"Unknown provider '{provider}'. "
+        "Supported providers: openai, ollama, anthropic, gemini, openrouter, custom."
     )

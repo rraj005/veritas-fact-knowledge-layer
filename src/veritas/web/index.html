@@ -99,13 +99,12 @@
             <div class="llm-field-group">
               <label class="filter-label" for="llm-provider-select">Provider</label>
               <select id="llm-provider-select" aria-label="Select LLM provider">
-                <option value="openai">OpenAI</option>
-                <option value="ollama">Ollama (local)</option>
+                <!-- Options populated dynamically from GET /config/llm/providers -->
               </select>
             </div>
 
-            <!-- OpenAI fields -->
-            <div id="llm-openai-fields" class="llm-provider-fields">
+            <!-- Dynamic API Key field (shown when provider needs_key=true) -->
+            <div id="llm-key-fields" class="llm-provider-fields" hidden>
               <div class="llm-field-group">
                 <label class="filter-label" for="llm-api-key">API Key</label>
                 <input
@@ -121,19 +120,18 @@
               </p>
             </div>
 
-            <!-- Ollama fields -->
-            <div id="llm-ollama-fields" class="llm-provider-fields" hidden>
+            <!-- Dynamic Base URL field (shown when provider needs_base_url=true) -->
+            <div id="llm-url-fields" class="llm-provider-fields" hidden>
               <div class="llm-field-group">
                 <label class="filter-label" for="llm-base-url">Base URL</label>
                 <input
                   type="text"
                   id="llm-base-url"
-                  value="http://localhost:11434"
+                  value=""
                   autocomplete="off"
                   spellcheck="false"
                 />
               </div>
-              <p class="llm-note">No API key required for Ollama.</p>
             </div>
 
             <div class="llm-actions">

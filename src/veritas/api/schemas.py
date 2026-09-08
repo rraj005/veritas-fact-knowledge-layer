@@ -200,3 +200,18 @@ class ExportResponse(BaseModel):
 
     facts: list[dict[str, Any]]
     edges: list[dict[str, Any]]
+
+
+# ---------------------------------------------------------------------------
+# Response models — Provider metadata
+# ---------------------------------------------------------------------------
+
+
+class LLMProviderInfo(BaseModel):
+    """Metadata about a single LLM provider."""
+
+    id: str
+    label: str
+    needs_key: bool
+    needs_base_url: bool
+    default_base_url: str | None = None
