@@ -215,3 +215,5 @@ class LLMProviderInfo(BaseModel):
     needs_key: bool
     needs_base_url: bool
     default_base_url: str | None = None
+    # When True, the key field is shown but not required (for keyless local servers).
+    key_optional: bool = False

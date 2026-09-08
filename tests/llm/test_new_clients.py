@@ -59,7 +59,8 @@ def test_anthropic_client_request_shape(monkeypatch):
     body = captured["json"]
     assert body["model"] == "claude-3-5-sonnet-20241022"
     assert body["max_tokens"] == 512
-    assert body["temperature"] == 0.1
+    # temperature is intentionally omitted — some Anthropic models reject it
+    assert "temperature" not in body
     assert body["system"] == "You are helpful."
     assert body["messages"] == [{"role": "user", "content": "What is 2+2?"}]
 

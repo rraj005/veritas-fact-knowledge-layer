@@ -72,10 +72,17 @@ def list_models(
             )
         import httpx  # lazy import
 
-        response = httpx.get(
-            f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
-        )
-        response.raise_for_status()
+        try:
+            response = httpx.get(
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(
+                f"Gemini returned HTTP {e.response.status_code}. Check your API key."
+            ) from None
+        except httpx.RequestError:
+            raise RuntimeError("Could not reach the Gemini API.") from None
         data = response.json()
         models = [
             m["name"].removeprefix("models/")

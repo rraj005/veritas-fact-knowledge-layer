@@ -343,6 +343,7 @@ def build_app(
                 needs_key=p.needs_key,
                 needs_base_url=p.needs_base_url,
                 default_base_url=p.default_base_url,
+                key_optional=p.key_optional,
             )
             for p in PROVIDERS
         ]

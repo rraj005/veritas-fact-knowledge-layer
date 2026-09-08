@@ -1073,10 +1073,11 @@ function initLlmSetup() {
 
     if (meta.needs_key) {
       const key = apiKeyInput ? apiKeyInput.value : "";
-      if (!key.trim()) {
+      if (!key.trim() && !meta.key_optional) {
         showError(connectError, "Please enter an API key.");
         return;
       }
+      // Send api_key even if empty (backend accepts empty string for keyless endpoints)
       reqBody.api_key = key;
     }
 

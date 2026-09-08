@@ -14,6 +14,9 @@ class ProviderInfo:
     needs_key: bool
     needs_base_url: bool
     default_base_url: str | None
+    # When True, the key field is shown (needs_key=True) but NOT required —
+    # keyless local servers (vLLM, local Ollama-compatible) can connect without one.
+    key_optional: bool = False
 
 
 PROVIDERS: list[ProviderInfo] = [
@@ -58,6 +61,7 @@ PROVIDERS: list[ProviderInfo] = [
         needs_key=True,
         needs_base_url=True,
         default_base_url=None,
+        key_optional=True,  # keyless local servers (vLLM, etc.) need no auth
     ),
 ]
 

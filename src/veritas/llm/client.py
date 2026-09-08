@@ -96,10 +96,11 @@ class AnthropicClient:
     ) -> str:
         import httpx  # lazy import
 
+        # temperature is omitted from the request body entirely — some Anthropic
+        # models reject an explicit temperature parameter, so we never send it.
         payload = {
             "model": self._model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "system": system,
             "messages": [{"role": "user", "content": user}],
         }
@@ -142,8 +143,15 @@ class GeminiClient:
                 "temperature": temperature,
             },
         }
-        response = httpx.post(url, json=payload)
-        response.raise_for_status()
+        try:
+            response = httpx.post(url, json=payload)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(
+                f"Gemini request failed with HTTP {e.response.status_code}."
+            ) from None
+        except httpx.RequestError:
+            raise RuntimeError("Gemini request failed: could not reach the API.") from None
         data = response.json()
         return data["candidates"][0]["content"]["parts"][0]["text"]
 

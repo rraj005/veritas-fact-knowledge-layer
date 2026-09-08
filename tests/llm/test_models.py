@@ -214,6 +214,48 @@ def test_gemini_missing_key_raises():
         list_models("gemini", api_key="")
 
 
+def test_gemini_http_error_does_not_leak_key(monkeypatch):
+    """list_models('gemini') raises a safe RuntimeError that omits the API key on HTTP errors."""
+    import httpx
+
+    def fake_get(url: str, **_kw):
+        # Simulate a 403 with the key embedded in the request URL (as Gemini does).
+        request = httpx.Request("GET", url)
+        response = httpx.Response(403, request=request)
+        raise httpx.HTTPStatusError("403 Forbidden", request=request, response=response)
+
+    monkeypatch.setattr("httpx.get", fake_get)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        list_models("gemini", api_key="SECRET123")
+
+    msg = str(exc_info.value)
+    # The error message must NOT contain the key or the query-param name
+    assert "SECRET123" not in msg, "API key must not appear in the RuntimeError message"
+    assert "key=" not in msg, "URL key param must not appear in the RuntimeError message"
+    # The exception chain must be suppressed (from None)
+    assert exc_info.value.__cause__ is None, "__cause__ must be None (from None used)"
+
+
+def test_gemini_request_error_does_not_leak_key(monkeypatch):
+    """list_models('gemini') raises a safe RuntimeError that omits the API key on connect errors."""
+    import httpx
+
+    def fake_get(url: str, **_kw):
+        request = httpx.Request("GET", url)
+        raise httpx.ConnectError("Connection refused", request=request)
+
+    monkeypatch.setattr("httpx.get", fake_get)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        list_models("gemini", api_key="SECRET123")
+
+    msg = str(exc_info.value)
+    assert "SECRET123" not in msg, "API key must not appear in the RuntimeError message"
+    assert "key=" not in msg, "URL key param must not appear in the RuntimeError message"
+    assert exc_info.value.__cause__ is None, "__cause__ must be None (from None used)"
+
+
 # ---------------------------------------------------------------------------
 # OpenRouter
 # ---------------------------------------------------------------------------
