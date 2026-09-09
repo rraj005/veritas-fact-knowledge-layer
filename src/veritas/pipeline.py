@@ -217,6 +217,22 @@ class Pipeline:
             _emit("extracting", 0.6, f"Normalized {len(facts)} facts")
 
             # ------------------------------------------------------------------
+            # Step 6b: deduplicate near-duplicate facts within this document
+            # ------------------------------------------------------------------
+            from veritas.extraction.dedupe import dedupe_facts
+
+            before_dedupe = len(facts)
+            facts = dedupe_facts(facts)
+            after_dedupe = len(facts)
+            if before_dedupe != after_dedupe:
+                _emit(
+                    "extracting",
+                    0.62,
+                    f"Deduped facts: {before_dedupe} → {after_dedupe} "
+                    f"({before_dedupe - after_dedupe} near-duplicates removed)",
+                )
+
+            # ------------------------------------------------------------------
             # Step 7: persist facts + attribute vocab
             # ------------------------------------------------------------------
             if facts:
