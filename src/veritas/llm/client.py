@@ -3,10 +3,71 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 from veritas.llm.cache import DiskCache, cache_key
+
+# ---------------------------------------------------------------------------
+# Shared timeout for raw-httpx LLM completion calls.
+# LLM generation is slow — 120 s read timeout, 10 s connect timeout.
+# ---------------------------------------------------------------------------
+try:
+    import httpx as _httpx_mod
+    _LLM_TIMEOUT = _httpx_mod.Timeout(120.0, connect=10.0)
+except ImportError:  # pragma: no cover — httpx always available
+    _LLM_TIMEOUT = None  # type: ignore[assignment]
+
+# HTTP status codes considered transient / retryable.
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+_RETRY_BACKOFFS = (1.0, 2.0, 4.0)
+
+
+def _post_with_retry(
+    url: str,
+    *,
+    json: object,
+    headers: dict | None = None,
+    timeout: object = None,
+    attempts: int = 3,
+) -> object:
+    """POST *url* with *json* body, retrying on transient errors.
+
+    Retries on:
+    - ``httpx.RequestError`` (timeouts, connection errors)
+    - HTTP status 429 / 500 / 502 / 503 / 504
+
+    Raises:
+        RuntimeError: After all attempts are exhausted.  The message intentionally
+            omits the URL and any API key (Gemini embeds the key in the URL).
+    """
+    import httpx  # lazy import
+
+    if timeout is None:
+        timeout = _LLM_TIMEOUT
+
+    for attempt in range(1, attempts + 1):
+        is_last = attempt == attempts
+        try:
+            kw: dict = {"json": json, "timeout": timeout}
+            if headers is not None:
+                kw["headers"] = headers
+            response = httpx.post(url, **kw)
+            status = getattr(response, "status_code", None)
+            if status in _RETRY_STATUSES and not is_last:
+                # Transient HTTP error — sleep then retry.
+                backoff = _RETRY_BACKOFFS[attempt - 1] if attempt - 1 < len(_RETRY_BACKOFFS) else _RETRY_BACKOFFS[-1]
+                time.sleep(backoff)
+                continue
+            return response
+        except httpx.RequestError:
+            if is_last:
+                break
+            backoff = _RETRY_BACKOFFS[attempt - 1] if attempt - 1 < len(_RETRY_BACKOFFS) else _RETRY_BACKOFFS[-1]
+            time.sleep(backoff)
+
+    raise RuntimeError("LLM request failed after retries.") from None
 
 
 @runtime_checkable
@@ -94,8 +155,6 @@ class AnthropicClient:
         max_tokens: int = 2048,
         temperature: float = 0.0,
     ) -> str:
-        import httpx  # lazy import
-
         # temperature is omitted from the request body entirely — some Anthropic
         # models reject an explicit temperature parameter, so we never send it.
         payload = {
@@ -109,9 +168,17 @@ class AnthropicClient:
             "anthropic-version": self._API_VERSION,
             "content-type": "application/json",
         }
-        response = httpx.post(self._API_URL, json=payload, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+        try:
+            response = _post_with_retry(
+                self._API_URL,
+                json=payload,
+                headers=headers,
+                timeout=_LLM_TIMEOUT,
+            )
+            response.raise_for_status()  # type: ignore[union-attr]
+        except RuntimeError:
+            raise RuntimeError("Anthropic request failed after retries.") from None
+        data = response.json()  # type: ignore[union-attr]
         return data["content"][0]["text"]
 
 
@@ -144,15 +211,15 @@ class GeminiClient:
             },
         }
         try:
-            response = httpx.post(url, json=payload)
-            response.raise_for_status()
+            response = _post_with_retry(url, json=payload, timeout=_LLM_TIMEOUT)
+            response.raise_for_status()  # type: ignore[union-attr]
         except httpx.HTTPStatusError as e:
             raise RuntimeError(
                 f"Gemini request failed with HTTP {e.response.status_code}."
             ) from None
-        except httpx.RequestError:
-            raise RuntimeError("Gemini request failed: could not reach the API.") from None
-        data = response.json()
+        except RuntimeError:
+            raise RuntimeError("Gemini request failed after retries.") from None
+        data = response.json()  # type: ignore[union-attr]
         return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
@@ -173,8 +240,6 @@ class OllamaClient:
         max_tokens: int = 2048,
         temperature: float = 0.0,
     ) -> str:
-        import httpx  # lazy import
-
         payload = {
             "model": self._model,
             "messages": [
@@ -183,9 +248,16 @@ class OllamaClient:
             ],
             "stream": False,
         }
-        response = httpx.post(f"{self._base}/api/chat", json=payload)
-        response.raise_for_status()
-        data = response.json()
+        try:
+            response = _post_with_retry(
+                f"{self._base}/api/chat",
+                json=payload,
+                timeout=_LLM_TIMEOUT,
+            )
+            response.raise_for_status()  # type: ignore[union-attr]
+        except RuntimeError:
+            raise RuntimeError("Ollama request failed after retries.") from None
+        data = response.json()  # type: ignore[union-attr]
         return data["message"]["content"]
 
 

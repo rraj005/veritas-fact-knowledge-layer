@@ -191,7 +191,21 @@ class Pipeline:
                 chunks, self._llm, concurrency=self._settings.extract_concurrency
             )
 
-            _emit("extracting", 0.55, f"Extracted {len(raw_facts)} raw facts")
+            if len(raw_facts) == 0 and len(chunks) > 0:
+                logger.warning(
+                    "pipeline: extracted 0 facts from %d chunks — "
+                    "the model calls may be timing out or returning nothing; "
+                    "check the provider/model.",
+                    len(chunks),
+                )
+                _emit(
+                    "extracting",
+                    0.55,
+                    "0 facts — the model calls may be timing out or returning nothing; "
+                    "check the provider/model",
+                )
+            else:
+                _emit("extracting", 0.55, f"Extracted {len(raw_facts)} raw facts")
 
             # ------------------------------------------------------------------
             # Step 6: normalize each fact

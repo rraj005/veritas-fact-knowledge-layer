@@ -43,7 +43,7 @@ def list_models(
         import httpx  # lazy import
 
         base = (base_url or _DEFAULT_OLLAMA_BASE).rstrip("/")
-        response = httpx.get(f"{base}/api/tags")
+        response = httpx.get(f"{base}/api/tags", timeout=30.0)
         response.raise_for_status()
         data = response.json()
         return sorted(m["name"] for m in data.get("models", []))
@@ -59,6 +59,7 @@ def list_models(
         response = httpx.get(
             "https://api.anthropic.com/v1/models",
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            timeout=30.0,
         )
         response.raise_for_status()
         data = response.json()
@@ -75,6 +76,7 @@ def list_models(
         try:
             response = httpx.get(
                 f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+                timeout=30.0,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -97,7 +99,7 @@ def list_models(
         headers: dict[str, str] = {}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        response = httpx.get("https://openrouter.ai/api/v1/models", headers=headers)
+        response = httpx.get("https://openrouter.ai/api/v1/models", headers=headers, timeout=30.0)
         response.raise_for_status()
         data = response.json()
         return sorted(m["id"] for m in data.get("data", []))
@@ -114,7 +116,7 @@ def list_models(
         headers = {}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        response = httpx.get(url, headers=headers)
+        response = httpx.get(url, headers=headers, timeout=30.0)
         response.raise_for_status()
         data = response.json()
         return sorted(m["id"] for m in data.get("data", []))

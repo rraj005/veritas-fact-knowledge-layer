@@ -190,7 +190,7 @@ def extract_from_chunk(chunk: Chunk, llm: LLMClient) -> list[Fact]:
 def extract_facts(
     chunks: list[Chunk],
     llm: LLMClient,
-    concurrency: int = 4,
+    concurrency: int = 3,
 ) -> list[Fact]:
     """Extract facts from all *chunks* using a thread pool.
 
@@ -208,6 +208,8 @@ def extract_facts(
         return []
 
     all_facts: list[Fact] = []
+    total = len(chunks)
+    failed = 0
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         # Submit all tasks; preserve order of results.
@@ -216,6 +218,7 @@ def extract_facts(
             try:
                 all_facts.extend(future.result())
             except Exception as exc:  # noqa: BLE001
+                failed += 1
                 chunk = futures[future]
                 logger.warning(
                     "extract_from_chunk failed for chunk (doc=%s page=%d): %s",
@@ -223,5 +226,12 @@ def extract_facts(
                     chunk.page,
                     exc,
                 )
+
+    if failed:
+        logger.warning(
+            "extract_facts: %d of %d chunks failed to extract",
+            failed,
+            total,
+        )
 
     return all_facts
