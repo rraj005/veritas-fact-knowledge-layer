@@ -174,70 +174,141 @@ function formatPeriod(fact) {
 }
 
 // ---------------------------------------------------------------------------
-// VIEW: Upload
+// VIEW: Upload — multiple-file support, sequential processing
 // ---------------------------------------------------------------------------
 function initUpload() {
   const zone = document.getElementById("drop-zone");
   const fileInput = document.getElementById("file-input");
-  const progressWrap = document.getElementById("progress-wrap");
-  const progressBar = document.getElementById("progress-bar-fill");
-  const progressPct = document.getElementById("progress-pct");
-  const progressStage = document.getElementById("progress-stage");
-  const progressFilename = document.getElementById("progress-filename");
+  const uploadList = document.getElementById("upload-list");
 
-  let pollTimer = null;
+  // Queue of pending File objects; only one upload+poll runs at a time.
+  let _uploadQueue = [];
+  let _uploading = false;
 
-  function startUpload(file) {
-    if (!file) return;
+  // Create a status row for a single file and return its controller.
+  function createUploadRow(filename) {
+    const item = el("div", { cls: "upload-item" });
+
+    const header = el("div", { cls: "upload-item-header" });
+    const nameEl = el("span", { cls: "upload-item-filename" });
+    nameEl.textContent = filename;
+    const pctEl = el("span", { cls: "upload-item-pct" });
+    pctEl.textContent = "0%";
+    header.append(nameEl, pctEl);
+
+    const track = el("div", { cls: "upload-item-bar-track" });
+    const fill = el("div", { cls: "upload-item-bar-fill" });
+    track.appendChild(fill);
+
+    const stageEl = el("span", { cls: "upload-item-stage" });
+    stageEl.textContent = "Queued";
+
+    item.append(header, track, stageEl);
+    uploadList.appendChild(item);
+
+    return {
+      setProgress(pct, stageTxt, cls) {
+        fill.style.width = pct + "%";
+        pctEl.textContent = pct + "%";
+        stageEl.textContent = stageTxt;
+        stageEl.className = "upload-item-stage" + (cls ? " " + cls : "");
+      },
+    };
+  }
+
+  // Process one file: upload → poll job to completion → call cb.
+  async function processFile(file, row) {
     if (file.type !== "application/pdf" && !file.name.endsWith(".pdf")) {
-      alert("Please upload a PDF file.");
+      row.setProgress(0, "Skipped — not a PDF", "error");
       return;
     }
     const fd = new FormData();
     fd.append("file", file);
 
-    progressWrap.classList.add("visible");
-    txt(progressFilename, file.name);
-    setProgress(0, "Uploading…", "");
+    row.setProgress(0, "Uploading…", "");
 
-    API.post("/documents", fd)
-      .then((res) => {
-        if (!res.job_id) throw new Error("No job_id returned");
-        pollJob(res.job_id);
-      })
-      .catch((err) => {
-        setProgress(0, "Upload failed: " + err.message, "error");
-      });
-  }
+    let jobId;
+    try {
+      const res = await API.post("/documents", fd);
+      if (!res.job_id) throw new Error("No job_id returned");
+      jobId = res.job_id;
+    } catch (err) {
+      row.setProgress(0, "Upload failed: " + err.message, "error");
+      return;
+    }
 
-  function setProgress(pct, stage, cls) {
-    progressBar.style.width = pct + "%";
-    txt(progressPct, pct + "%");
-    txt(progressStage, stage);
-    progressStage.className = "progress-stage" + (cls ? " " + cls : "");
-  }
+    // Poll until done or error.
+    await new Promise((resolve) => {
+      const timer = setInterval(async () => {
+        try {
+          const job = await API.get(`/jobs/${jobId}`);
+          const pct = Math.round((job.progress ?? 0) * 100);
 
-  function pollJob(jobId) {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(async () => {
-      try {
-        const job = await API.get(`/jobs/${jobId}`);
-        const pct = Math.round((job.progress ?? 0) * 100);
-        setProgress(pct, job.message || job.status, "");
-
-        if (job.status === "done") {
-          clearInterval(pollTimer);
-          setProgress(100, "Ingestion complete ✓", "done");
-          refreshHealth();
-        } else if (job.status === "error") {
-          clearInterval(pollTimer);
-          setProgress(pct, "Error: " + (job.message || "unknown"), "error");
+          if (job.status === "done") {
+            clearInterval(timer);
+            const factCount = job.doc_id
+              ? await getFactCount(job.doc_id)
+              : null;
+            if (factCount === 0) {
+              row.setProgress(
+                100,
+                "Processed — 0 facts extracted (model returned no structured facts; try another model)",
+                "warn"
+              );
+            } else {
+              const factTxt = factCount != null ? ` (${factCount} facts)` : "";
+              row.setProgress(100, "Ingestion complete" + factTxt + " ✓", "done");
+            }
+            // Live refresh: counts + documents list + active data view.
+            refreshHealth();
+            refreshDocumentsIfVisible();
+            reloadActiveDataView();
+            resolve();
+          } else if (job.status === "error") {
+            clearInterval(timer);
+            row.setProgress(pct, "Error: " + (job.message || "unknown"), "error");
+            resolve();
+          } else {
+            row.setProgress(pct, job.message || job.status, "");
+          }
+        } catch (err) {
+          clearInterval(timer);
+          row.setProgress(0, "Poll error: " + err.message, "error");
+          resolve();
         }
-      } catch (err) {
-        clearInterval(pollTimer);
-        setProgress(0, "Poll error: " + err.message, "error");
-      }
-    }, 1500);
+      }, 1500);
+    });
+  }
+
+  // Helper: fetch fact count for a doc_id.
+  async function getFactCount(docId) {
+    try {
+      const docs = await API.get("/documents");
+      const doc = docs.find((d) => d.id === docId);
+      return doc ? (doc.fact_count ?? null) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Drain the upload queue one file at a time.
+  async function drainQueue() {
+    if (_uploading) return;
+    _uploading = true;
+    while (_uploadQueue.length) {
+      const { file, row } = _uploadQueue.shift();
+      await processFile(file, row);
+    }
+    _uploading = false;
+  }
+
+  // Enqueue a list of files (FileList or array).
+  function enqueueFiles(files) {
+    for (const file of files) {
+      const row = createUploadRow(file.name);
+      _uploadQueue.push({ file, row });
+    }
+    drainQueue();
   }
 
   // Drag-and-drop
@@ -249,13 +320,16 @@ function initUpload() {
   zone.addEventListener("drop", (e) => {
     e.preventDefault();
     zone.classList.remove("drag-over");
-    const file = e.dataTransfer.files[0];
-    if (file) startUpload(file);
+    const files = Array.from(e.dataTransfer.files).filter(
+      (f) => f.type === "application/pdf" || f.name.endsWith(".pdf")
+    );
+    if (files.length) enqueueFiles(files);
   });
 
-  // File picker
+  // File picker (multiple)
   fileInput.addEventListener("change", () => {
-    if (fileInput.files[0]) startUpload(fileInput.files[0]);
+    const files = Array.from(fileInput.files);
+    if (files.length) enqueueFiles(files);
     fileInput.value = "";
   });
 
@@ -265,13 +339,126 @@ function initUpload() {
     fileInput.click();
   });
 
-  // Keyboard activation: Enter or Space triggers the file picker (Finding 2)
+  // Keyboard activation: Enter or Space triggers the file picker
   zone.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       fileInput.click();
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// VIEW: Documents
+// ---------------------------------------------------------------------------
+async function loadDocuments() {
+  const container = document.getElementById("docs-table-wrap");
+  container.innerHTML = "";
+  const loading = el("div", { cls: "state-loading" });
+  loading.textContent = "Loading documents…";
+  container.appendChild(loading);
+
+  try {
+    const docs = await API.get("/documents");
+    renderDocumentsTable(container, docs);
+  } catch (err) {
+    container.innerHTML = "";
+    const e = el("div", { cls: "state-error" });
+    e.textContent = "Failed to load documents: " + err.message;
+    container.appendChild(e);
+  }
+}
+
+function renderDocumentsTable(container, docs) {
+  container.innerHTML = "";
+
+  if (!docs.length) {
+    const empty = el("div", { cls: "state-empty" });
+    empty.textContent = "No documents ingested yet. Upload a PDF to get started.";
+    container.appendChild(empty);
+    return;
+  }
+
+  const wrap = el("div", { cls: "table-wrap" });
+  const table = el("table");
+  const thead = el("thead");
+  const headerRow = el("tr");
+
+  for (const h of ["Filename", "Pages", "Status", "Facts", "Ingested"]) {
+    const th = el("th");
+    th.textContent = h;
+    headerRow.appendChild(th);
+  }
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = el("tbody");
+  for (const doc of docs) {
+    const tr = el("tr");
+
+    // Filename
+    const tdName = el("td");
+    const nameSpan = el("span", { cls: "truncate" });
+    nameSpan.textContent = doc.filename;
+    tdName.appendChild(nameSpan);
+    tr.appendChild(tdName);
+
+    // Pages
+    const tdPages = el("td", { cls: "cell-mono" });
+    tdPages.textContent = doc.num_pages != null ? String(doc.num_pages) : "—";
+    tr.appendChild(tdPages);
+
+    // Status badge
+    const tdStatus = el("td");
+    const badge = el("span", { cls: "status-badge status-" + (doc.status || "queued") });
+    badge.textContent = doc.status || "queued";
+    tdStatus.appendChild(badge);
+    tr.appendChild(tdStatus);
+
+    // Fact count
+    const tdFacts = el("td");
+    if (doc.status === "done" && doc.fact_count === 0) {
+      const zeroNote = el("span");
+      zeroNote.style.color = "var(--amber)";
+      zeroNote.style.fontSize = "var(--text-xs)";
+      zeroNote.textContent = "0 — no facts extracted (try another model)";
+      tdFacts.appendChild(zeroNote);
+    } else {
+      tdFacts.textContent = doc.fact_count != null ? String(doc.fact_count) : "—";
+    }
+    tr.appendChild(tdFacts);
+
+    // Created at
+    const tdDate = el("td", { cls: "cell-mono" });
+    const dateStr = doc.created_at ? doc.created_at.slice(0, 19).replace("T", " ") : "—";
+    tdDate.textContent = dateStr;
+    tr.appendChild(tdDate);
+
+    tbody.appendChild(tr);
+  }
+
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  container.appendChild(wrap);
+}
+
+// Refresh the documents view only if it's currently visible.
+function refreshDocumentsIfVisible() {
+  if (currentView === "view-documents") {
+    loadDocuments();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Live-refresh helper: reload the active data view after ingestion completes.
+// ---------------------------------------------------------------------------
+function reloadActiveDataView() {
+  switch (currentView) {
+    case "view-facts":         loadFacts();         break;
+    case "view-relationships": loadRelationships(); break;
+    case "view-cases":         loadCases();         break;
+    default:                                        break;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1254,6 +1441,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Register views
   registerView("view-llm-setup",     initLlmSetup);
   registerView("view-upload",        () => {});
+  registerView("view-documents",     loadDocuments);
   registerView("view-facts",         loadFacts);
   registerView("view-relationships", loadRelationships);
   registerView("view-cases",         loadCases);

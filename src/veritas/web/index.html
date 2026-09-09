@@ -56,6 +56,10 @@
         <span class="nav-icon">↑</span>
         Upload
       </button>
+      <button class="nav-item" data-view="view-documents">
+        <span class="nav-icon">☰</span>
+        Documents
+      </button>
       <button class="nav-item" data-view="view-facts">
         <span class="nav-icon">≡</span>
         Facts
@@ -183,34 +187,37 @@
         </div>
 
         <div id="drop-zone" role="button" tabindex="0"
-             aria-label="Upload area — drag and drop or click to select a PDF">
+             aria-label="Upload area — drag and drop or click to select PDFs">
           <input
             type="file"
             id="file-input"
             class="file-input-hidden"
             accept="application/pdf,.pdf"
+            multiple
             aria-hidden="true"
             tabindex="-1"
           />
           <span class="drop-icon">📄</span>
-          <p class="drop-title">Drop your PDF here</p>
-          <p class="drop-hint">or click to browse files</p>
+          <p class="drop-title">Drop your PDFs here</p>
+          <p class="drop-hint">or click to browse — multiple files supported</p>
           <button type="button" class="btn btn-primary" tabindex="-1" aria-hidden="true">
-            Select PDF
+            Select PDFs
           </button>
         </div>
 
-        <!-- Progress card -->
-        <div id="progress-wrap" class="progress-wrap" role="status" aria-live="polite">
-          <div class="progress-header">
-            <span class="progress-filename" id="progress-filename">—</span>
-            <span class="progress-pct" id="progress-pct">0%</span>
-          </div>
-          <div class="progress-bar-track">
-            <div class="progress-bar-fill" id="progress-bar-fill"></div>
-          </div>
-          <p class="progress-stage" id="progress-stage">Waiting…</p>
-        </div>
+        <!-- Upload queue list — one row per file with live status -->
+        <div id="upload-list" class="upload-list" role="status" aria-live="polite" aria-label="Upload progress"></div>
+      </section>
+
+      <!-- ============================================================
+           VIEW: DOCUMENTS
+           ============================================================ -->
+      <section id="view-documents" class="view" aria-labelledby="docs-title">
+        <h1 class="view-title" id="docs-title">Documents</h1>
+        <p class="view-subtitle">
+          All ingested documents with their extraction status and fact counts.
+        </p>
+        <div id="docs-table-wrap"></div>
       </section>
 
       <!-- ============================================================
