@@ -216,3 +216,54 @@ def test_openai_compatible_client_no_base_url(monkeypatch):
     instance = _FakeOpenAI._instances[0]
     # base_url should not be set (or falsy) when None is passed
     assert not instance._kwargs.get("base_url")
+
+
+# ---------------------------------------------------------------------------
+# Defensive parsing: never crash on responses that carry no usable text
+# ---------------------------------------------------------------------------
+
+
+def test_gemini_returns_empty_on_missing_content(monkeypatch):
+    """A Gemini candidate with no content (e.g. safety block) yields '' not a crash."""
+    def fake_post(url, *, json=None, headers=None, **_kw):
+        return _FakeResponse({"candidates": [{"finishReason": "SAFETY"}]})
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    assert GeminiClient(model="gemini-1.5-flash", api_key="k").complete("s", "u") == ""
+
+
+def test_gemini_returns_empty_on_no_candidates(monkeypatch):
+    def fake_post(url, *, json=None, headers=None, **_kw):
+        return _FakeResponse({"candidates": None})
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    assert GeminiClient(model="gemini-1.5-flash", api_key="k").complete("s", "u") == ""
+
+
+def test_anthropic_returns_empty_on_empty_content(monkeypatch):
+    def fake_post(url, *, json=None, headers=None, **_kw):
+        return _FakeResponse({"content": []})
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    assert AnthropicClient(model="m", api_key="k").complete("s", "u") == ""
+
+
+def test_ollama_returns_empty_on_missing_message(monkeypatch):
+    from veritas.llm.client import OllamaClient
+
+    def fake_post(url, *, json=None, headers=None, **_kw):
+        return _FakeResponse({})
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    assert OllamaClient(model="m", base_url="http://x").complete("s", "u") == ""
+
+
+def test_openai_compatible_returns_empty_on_none_choices():
+    """OpenRouter can return 200 with choices=None; complete() must return ''."""
+    client = OpenAICompatibleClient(api_key="k", model="m")
+
+    class _Resp:
+        choices = None
+
+    client._client.chat.completions.create = lambda **_kw: _Resp()  # type: ignore[attr-defined]
+    assert client.complete("s", "u") == ""

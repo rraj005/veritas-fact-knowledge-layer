@@ -126,7 +126,13 @@ class OpenAICompatibleClient:
                 {"role": "user", "content": user},
             ],
         )
-        return response.choices[0].message.content or ""
+        # Defensive: some OpenAI-compatible endpoints (e.g. OpenRouter on a
+        # transient upstream error) return 200 with no choices; never crash.
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            return ""
+        message = getattr(choices[0], "message", None)
+        return (getattr(message, "content", None) or "") if message else ""
 
 
 # Keep the original name as an alias so existing tests importing OpenAIClient still work.
@@ -179,7 +185,12 @@ class AnthropicClient:
         except RuntimeError:
             raise RuntimeError("Anthropic request failed after retries.") from None
         data = response.json()  # type: ignore[union-attr]
-        return data["content"][0]["text"]
+        # Defensive navigation: return "" rather than crash when a response
+        # carries no usable text (e.g. a stop/refusal with empty content).
+        content = data.get("content") or []
+        if content and isinstance(content, list):
+            return (content[0] or {}).get("text", "") or ""
+        return ""
 
 
 class GeminiClient:
@@ -220,7 +231,17 @@ class GeminiClient:
         except RuntimeError:
             raise RuntimeError("Gemini request failed after retries.") from None
         data = response.json()  # type: ignore[union-attr]
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        # Defensive navigation: Gemini can return a candidate with no content
+        # (e.g. a safety block or a truncated finish). Return "" instead of
+        # crashing with 'NoneType' object is not subscriptable.
+        candidates = data.get("candidates") or []
+        if not candidates:
+            return ""
+        content = (candidates[0] or {}).get("content") or {}
+        parts = content.get("parts") or []
+        if not parts:
+            return ""
+        return (parts[0] or {}).get("text", "") or ""
 
 
 class OllamaClient:
@@ -258,7 +279,8 @@ class OllamaClient:
         except RuntimeError:
             raise RuntimeError("Ollama request failed after retries.") from None
         data = response.json()  # type: ignore[union-attr]
-        return data["message"]["content"]
+        message = data.get("message") or {}
+        return message.get("content", "") or ""
 
 
 # ---------------------------------------------------------------------------

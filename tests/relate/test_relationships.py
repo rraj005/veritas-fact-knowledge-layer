@@ -201,3 +201,22 @@ def test_adjudicate_reasoning_with_brace_inside_string():
     assert e is not None
     assert e.relation == "corroborate"
     assert "}" in e.reasoning
+
+
+class _RaisingLLM:
+    """LLM stub whose complete() raises, simulating a bad provider response."""
+
+    def complete(self, system: str, user: str, **_kw) -> str:
+        raise TypeError("'NoneType' object is not subscriptable")
+
+
+def test_find_relationships_survives_adjudication_error():
+    """A crashing adjudication skips that pair instead of aborting the whole call."""
+    fact_a = _f("doc_a", "100", "FY24")
+    fact_b = _f("doc_b", "200", "FY24")
+    store = _FakeStore([fact_a, fact_b])
+    index = _RecordingIndex([(fact_b.id, 0.1, {"doc_id": "doc_b"})])
+
+    # Must not raise; the bad pair is simply skipped.
+    edges = find_relationships(fact_a, store, index, _RaisingLLM(), top_k=8)
+    assert edges == []

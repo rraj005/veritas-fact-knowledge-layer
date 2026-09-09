@@ -140,7 +140,18 @@ def find_relationships(
             logger.warning("find_relationships: fact %r not found in store; skipping", cand_id)
             continue
 
-        edge = adjudicate(fact, candidate_fact, llm)
+        try:
+            edge = adjudicate(fact, candidate_fact, llm)
+        except Exception as exc:  # noqa: BLE001
+            # A single bad adjudication (e.g. a malformed provider response)
+            # must never abort ingestion of the whole document.
+            logger.warning(
+                "find_relationships: adjudication failed for pair (%s, %s): %s",
+                fact.id,
+                cand_id,
+                exc,
+            )
+            continue
         if edge is None:
             continue
 
