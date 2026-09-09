@@ -121,9 +121,6 @@ Veritas uses **retrieval-before-reasoning**: rather than sending all known facts
 | LLM-call caching (DiskCache) | Repeated identical prompts served from disk | Cache grows unbounded; no TTL |
 | Facts indexed AFTER relate | Prevents self-relating within a single document | Edges are only created at ingestion time; new edges to later documents require re-ingestion |
 
-### AI Tools Used
-
-AI coding assistants were used during development.
 
 ---
 
