@@ -88,3 +88,34 @@ All checks passed!
 ## Commit Hashes
 
 See git log — commits created after this report.
+
+---
+
+## Fix Round 1
+
+### Findings addressed
+
+**Finding 1 (Important) — duplicate upload job stuck at "queued"**
+`src/veritas/pipeline.py`: In `ingest_document()`, the idempotency early-return path now updates the job row to `status="done"`, `progress=1.0`, `doc_id=existing.id` before returning, so duplicate uploads no longer leave the poller spinning forever.
+
+**Finding 2 (Minor) — test consistency**
+`tests/api/test_app.py`: Replaced the two direct `client.app.state.ingest_queue.join()` calls in `test_two_sequential_uploads_both_ingest` with the existing `_wait_ingest(client)` helper.
+
+**Finding 3 (Minor) — worker import**
+`src/veritas/api/app.py`: Moved `from veritas.pipeline import Pipeline` out of the `while True` body of `_ingest_worker` to function scope above the loop; import now happens once per worker thread instead of once per job.
+
+### New test added
+`tests/api/test_app.py::test_duplicate_upload_job_reaches_done`: Uploads the same PDF bytes twice (same content hash). Asserts the second job reaches `status="done"` and `progress=1.0`, and that no extra document or fact records are created.
+
+### Test results
+
+```
+187 passed, 1 warning in 15.48s
+(186 pre-existing + 1 new)
+```
+
+### Ruff results
+
+```
+All checks passed!
+```

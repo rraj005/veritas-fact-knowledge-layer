@@ -729,7 +729,7 @@ def test_two_sequential_uploads_both_ingest(tmp_path: Path) -> None:
     )
     assert r_a.status_code == 200, r_a.text
     job_id_a = r_a.json()["job_id"]
-    client.app.state.ingest_queue.join()
+    _wait_ingest(client)
 
     # Upload doc B and wait for completion.
     r_b = client.post(
@@ -738,7 +738,7 @@ def test_two_sequential_uploads_both_ingest(tmp_path: Path) -> None:
     )
     assert r_b.status_code == 200, r_b.text
     job_id_b = r_b.json()["job_id"]
-    client.app.state.ingest_queue.join()
+    _wait_ingest(client)
 
     # Both jobs must reach "done".
     job_a = client.get(f"/jobs/{job_id_a}").json()
@@ -780,4 +780,64 @@ def test_documents_reports_fact_count(client_with_fakes, tiny_pdf_bytes: bytes) 
     assert "fact_count" in doc, "DocumentResponse must include fact_count field"
     assert doc["fact_count"] >= 1, (
         f"Expected fact_count >= 1 for a successfully ingested doc, got {doc['fact_count']}"
+    )
+
+
+def test_duplicate_upload_job_reaches_done(tmp_path: Path) -> None:
+    """Uploading the same PDF bytes twice must NOT leave the second job stuck at 'queued'.
+
+    The second upload hits the idempotency path (same content hash) and must
+    have its job marked 'done' with progress=1.0 before returning.  No
+    duplicate document or facts should be created.
+    """
+    doc_text = "Revenue was 100 crore in FY24."
+    client = _build_fake_client_for_doc(tmp_path, doc_text)
+
+    from tests.fixtures.make_pdf import make_pdf
+
+    pdf = tmp_path / "dup.pdf"
+    make_pdf(pdf, [doc_text])
+    pdf_bytes = pdf.read_bytes()
+
+    # First upload — full ingestion.
+    r1 = client.post(
+        "/documents",
+        files={"file": ("dup.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert r1.status_code == 200, r1.text
+    job_id_1 = r1.json()["job_id"]
+    _wait_ingest(client)
+
+    job1 = client.get(f"/jobs/{job_id_1}").json()
+    assert job1["status"] == "done", f"First job stuck at: {job1['status']!r}"
+
+    doc_count_after_first = len(client.get("/documents").json())
+    fact_count_after_first = len(client.get("/facts").json())
+
+    # Second upload — identical bytes, should hit the idempotency path.
+    r2 = client.post(
+        "/documents",
+        files={"file": ("dup.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert r2.status_code == 200, r2.text
+    job_id_2 = r2.json()["job_id"]
+    _wait_ingest(client)
+
+    # The second job must NOT be stuck at "queued".
+    job2 = client.get(f"/jobs/{job_id_2}").json()
+    assert job2["status"] == "done", (
+        f"Duplicate-upload job stuck at: {job2['status']!r} (expected 'done')"
+    )
+    assert job2["progress"] == 1.0, f"Expected progress=1.0, got {job2['progress']}"
+
+    # No additional document or fact records must be created.
+    doc_count_after_second = len(client.get("/documents").json())
+    fact_count_after_second = len(client.get("/facts").json())
+    assert doc_count_after_second == doc_count_after_first, (
+        f"Duplicate upload created extra document records: "
+        f"{doc_count_after_first} → {doc_count_after_second}"
+    )
+    assert fact_count_after_second == fact_count_after_first, (
+        f"Duplicate upload created extra fact records: "
+        f"{fact_count_after_first} → {fact_count_after_second}"
     )

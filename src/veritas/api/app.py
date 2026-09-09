@@ -150,12 +150,12 @@ def build_app(
     app.state.ingest_queue = ingest_queue
 
     def _ingest_worker() -> None:
+        from veritas.pipeline import Pipeline
+
         while True:
             item = ingest_queue.get()
             upload_path, filename, job_id, active_llm = item
             try:
-                from veritas.pipeline import Pipeline
-
                 worker_pipeline = Pipeline(
                     store=store,
                     index=index,

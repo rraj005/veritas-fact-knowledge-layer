@@ -115,6 +115,17 @@ class Pipeline:
                 filename,
                 existing.id,
             )
+            if job_id is not None:
+                try:
+                    self._store.update_job(
+                        job_id,
+                        doc_id=existing.id,
+                        status="done",
+                        progress=1.0,
+                        message="Already ingested (duplicate document)",
+                    )
+                except Exception:
+                    logger.debug("Failed to update job %s on duplicate path", job_id, exc_info=True)
             return existing
 
         # ------------------------------------------------------------------
