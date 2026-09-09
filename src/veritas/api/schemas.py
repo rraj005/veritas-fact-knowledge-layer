@@ -74,6 +74,7 @@ class DocumentResponse(BaseModel):
     num_pages: int
     status: str
     created_at: str
+    fact_count: int = 0
 
 
 class UploadResponse(BaseModel):

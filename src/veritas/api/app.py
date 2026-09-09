@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, UploadFile
+from fastapi import FastAPI, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
@@ -138,6 +140,49 @@ def build_app(
         runtime_cfg.provider = "test"
         runtime_cfg.model = "test"
     app.state.llm_config = runtime_cfg
+
+    # ------------------------------------------------------------------
+    # Serialised ingestion queue — ONE worker thread, one job at a time.
+    # Each build_app call gets its own queue + daemon thread, which is
+    # fine for tests (daemon threads exit when the process exits).
+    # ------------------------------------------------------------------
+    ingest_queue: queue.Queue = queue.Queue()
+    app.state.ingest_queue = ingest_queue
+
+    def _ingest_worker() -> None:
+        while True:
+            item = ingest_queue.get()
+            upload_path, filename, job_id, active_llm = item
+            try:
+                from veritas.pipeline import Pipeline
+
+                worker_pipeline = Pipeline(
+                    store=store,
+                    index=index,
+                    llm=active_llm,
+                    settings=pipeline.settings,
+                )
+                worker_pipeline.ingest_document(upload_path, filename, job_id)
+            except Exception:
+                logger.exception(
+                    "Ingest worker: unhandled error for job %s (%s)", job_id, filename
+                )
+                # Mark job/doc as error if the pipeline didn't already do so.
+                try:
+                    job = store.get_job(job_id)
+                    if job is not None and job.status not in ("done", "error"):
+                        store.update_job(
+                            job_id,
+                            status="error",
+                            message="Unexpected worker error — see server logs",
+                        )
+                except Exception:
+                    logger.debug("Failed to mark job %s as error", job_id, exc_info=True)
+            finally:
+                ingest_queue.task_done()
+
+    _worker_thread = threading.Thread(target=_ingest_worker, daemon=True)
+    _worker_thread.start()
 
     # ------------------------------------------------------------------
     # Helper: resolve the active LLM client from runtime config
@@ -355,13 +400,13 @@ def build_app(
     @app.post("/documents", response_model=UploadResponse, tags=["ingest"])
     async def upload_document(
         file: UploadFile,
-        background_tasks: BackgroundTasks,
     ) -> UploadResponse:
         """Upload a PDF for background ingestion.
 
         Saves the uploaded file to the configured upload directory, creates a
-        Job record with status="queued", and schedules ingestion via
-        BackgroundTasks. Returns the job_id immediately.
+        Job record with status="queued", and enqueues ingestion on the single
+        background worker. Returns the job_id immediately.
+        Only one ingestion runs at a time — subsequent uploads queue up in order.
         """
         # Resolve the LLM client at request time (raises 400 if not configured).
         active_llm = _current_llm()
@@ -386,29 +431,15 @@ def build_app(
         )
         store.create_job(job)
 
-        # Build a per-request pipeline with the current LLM.
-        from veritas.pipeline import Pipeline
-
-        request_pipeline = Pipeline(
-            store=store,
-            index=index,
-            llm=active_llm,
-            settings=pipeline.settings,
-        )
-
-        # Schedule ingestion in the background.
-        background_tasks.add_task(
-            request_pipeline.ingest_document,
-            upload_path,
-            filename,
-            job_id,
-        )
+        # Enqueue the ingestion work item for the single background worker.
+        # This serializes uploads so no two ingestions share connections concurrently.
+        app.state.ingest_queue.put((upload_path, filename, job_id, active_llm))
 
         return UploadResponse(job_id=job_id, filename=filename)
 
     @app.get("/documents", response_model=list[DocumentResponse], tags=["ingest"])
     def list_documents() -> list[DocumentResponse]:
-        """Return all ingested documents."""
+        """Return all ingested documents, including per-document fact counts."""
         docs = store.list_documents()
         return [
             DocumentResponse(
@@ -418,6 +449,7 @@ def build_app(
                 num_pages=d.num_pages,
                 status=d.status,
                 created_at=d.created_at,
+                fact_count=store.fact_count(d.id),
             )
             for d in docs
         ]

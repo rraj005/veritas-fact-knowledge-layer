@@ -133,7 +133,13 @@ def client_with_fakes(tmp_path: Path, tmp_store: Store, tmp_index: VectorIndex, 
         llm=llm,
     )
     with TestClient(app) as c:
+        c.app = app  # expose app for queue.join() in tests
         yield c
+
+
+def _wait_ingest(client) -> None:
+    """Block until the ingest queue for *client*'s app is fully drained."""
+    client.app.state.ingest_queue.join()
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +167,9 @@ def test_upload_and_list_facts(client_with_fakes, tiny_pdf_bytes: bytes, doc_tex
     assert "job_id" in body
     assert body.get("filename") == "a.pdf"
 
-    # Under TestClient, background tasks run inline before the response is returned.
+    # Wait for the background worker to finish ingestion before asserting on facts.
+    _wait_ingest(client_with_fakes)
+
     facts = client_with_fakes.get("/facts").json()
     assert isinstance(facts, list)
     # The FakeLLM extracts exactly one fact whose evidence_span is the doc text.
@@ -332,6 +340,8 @@ def test_export_csv(client_with_fakes, tiny_pdf_bytes: bytes) -> None:
         "/documents",
         files={"file": ("exp.pdf", tiny_pdf_bytes, "application/pdf")},
     )
+    # Wait for the background worker to finish so facts are available.
+    _wait_ingest(client_with_fakes)
 
     r = client_with_fakes.get("/export?format=csv")
     assert r.status_code == 200
@@ -657,3 +667,117 @@ def test_select_model_empty_available_list_returns_400(tmp_path, tmp_store, tmp_
     # Selecting any model must fail when the provider returned no models.
     r2 = client.post("/config/llm/select", json={"model": "any-model"})
     assert r2.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# New tests: serialized ingestion queue + fact_count in documents endpoint
+# ---------------------------------------------------------------------------
+
+
+def _build_fake_client_for_doc(tmp_path: Path, doc_text: str):
+    """Build an app+TestClient pair where the FakeLLM extracts facts for *doc_text*."""
+    import dataclasses
+
+    from fastapi.testclient import TestClient
+
+    from veritas.api.app import build_app
+    from veritas.config import get_settings
+    from veritas.pipeline import Pipeline
+
+    store = Store(tmp_path / "veritas.db")
+    store.init_schema()
+    index = VectorIndex(tmp_path / "chroma", FakeEmbedder())
+
+    llm = _make_fake_llm(doc_text)
+    settings = get_settings()
+    settings = dataclasses.replace(settings, upload_dir=tmp_path / "uploads")
+    settings.upload_dir.mkdir(parents=True, exist_ok=True)
+
+    pipeline = Pipeline(store=store, index=index, llm=llm, settings=settings)
+    app = build_app(store=store, index=index, pipeline=pipeline, llm=llm)
+    client = TestClient(app)
+    client.app = app
+    return client
+
+
+def test_two_sequential_uploads_both_ingest(tmp_path: Path) -> None:
+    """Regression: second upload must not get stuck — both docs ingest to 'done'.
+
+    Before the ingest-queue fix, overlapping BackgroundTasks threads would
+    race on the shared SQLite connection and/or Chroma index; the second job
+    would remain at 'queued' indefinitely.  This test verifies that both jobs
+    reach 'done' and that GET /facts returns facts from BOTH doc_ids.
+    """
+    doc_text = "Revenue was 100 crore in FY24."
+
+    # Build a client whose FakeLLM extracts facts for doc_text.
+    client = _build_fake_client_for_doc(tmp_path, doc_text)
+
+    # Create two distinct PDFs with the same trigger text.
+    from tests.fixtures.make_pdf import make_pdf
+
+    pdf_a = tmp_path / "doc_a.pdf"
+    pdf_b = tmp_path / "doc_b.pdf"
+    make_pdf(pdf_a, [doc_text])
+    # Use slightly different text so content_hash differs → two separate ingest passes.
+    make_pdf(pdf_b, [doc_text + " (doc B)"])
+
+    # Upload doc A and wait for completion.
+    r_a = client.post(
+        "/documents",
+        files={"file": ("doc_a.pdf", pdf_a.read_bytes(), "application/pdf")},
+    )
+    assert r_a.status_code == 200, r_a.text
+    job_id_a = r_a.json()["job_id"]
+    client.app.state.ingest_queue.join()
+
+    # Upload doc B and wait for completion.
+    r_b = client.post(
+        "/documents",
+        files={"file": ("doc_b.pdf", pdf_b.read_bytes(), "application/pdf")},
+    )
+    assert r_b.status_code == 200, r_b.text
+    job_id_b = r_b.json()["job_id"]
+    client.app.state.ingest_queue.join()
+
+    # Both jobs must reach "done".
+    job_a = client.get(f"/jobs/{job_id_a}").json()
+    job_b = client.get(f"/jobs/{job_id_b}").json()
+    assert job_a["status"] == "done", f"Job A stuck at: {job_a['status']!r}"
+    assert job_b["status"] == "done", f"Job B stuck at: {job_b['status']!r}"
+
+    # GET /documents must list both docs with status "done".
+    docs = client.get("/documents").json()
+    assert len(docs) == 2, f"Expected 2 documents, got {len(docs)}"
+    for doc in docs:
+        assert doc["status"] == "done", f"Doc {doc['filename']!r} status: {doc['status']!r}"
+
+    # GET /facts must contain facts from both doc_ids.
+    facts = client.get("/facts").json()
+    assert len(facts) >= 1, "Expected at least one fact after two uploads"
+    doc_ids_with_facts = {f["doc_id"] for f in facts}
+    # Both documents must have contributed at least one fact.
+    doc_id_a = job_a["doc_id"]
+    doc_id_b = job_b["doc_id"]
+    assert doc_id_a in doc_ids_with_facts, "Doc A contributed no facts"
+    assert doc_id_b in doc_ids_with_facts, "Doc B contributed no facts"
+
+
+def test_documents_reports_fact_count(client_with_fakes, tiny_pdf_bytes: bytes) -> None:
+    """GET /documents must include fact_count >= 1 after a successful ingest."""
+    r = client_with_fakes.post(
+        "/documents",
+        files={"file": ("fc_test.pdf", tiny_pdf_bytes, "application/pdf")},
+    )
+    assert r.status_code == 200, r.text
+
+    # Wait for the background worker to complete ingestion.
+    _wait_ingest(client_with_fakes)
+
+    docs = client_with_fakes.get("/documents").json()
+    assert len(docs) >= 1, "Expected at least one document after upload"
+    doc = docs[0]
+    assert "fact_count" in doc, "DocumentResponse must include fact_count field"
+    assert doc["fact_count"] >= 1, (
+        f"Expected fact_count >= 1 for a successfully ingested doc, got {doc['fact_count']}"
+    )
