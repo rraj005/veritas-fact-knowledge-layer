@@ -77,6 +77,20 @@ def build_cases(store: Store) -> dict:
     """Return up to one example each of corroborate, contradict, reconcilable,
     plus the lowest-confidence fact as the *failure* slot.
 
+    Selection strategy:
+    - For each relation type pick the HIGHEST-confidence edge.
+    - Ensure facts shown are DISTINCT across all populated relation slots: no
+      fact_id may appear in more than one relation slot.  Slots are filled in
+      a fixed order (corroborate → contradict → reconcilable).  When picking
+      an edge for a slot, skip edges whose fact_a_id/fact_b_id is already used
+      by a previously-filled slot; take the highest-confidence remaining edge
+      that introduces no already-used fact.  If no non-overlapping edge exists,
+      fall back to the highest-confidence edge of that type (so a slot is still
+      populated) — but prefer non-overlapping.
+    - The failure slot is the lowest-confidence fact not already used in the
+      three relation slots (falls back to lowest-confidence overall if all are
+      used).
+
     Structure::
 
         {
@@ -93,18 +107,57 @@ def build_cases(store: Store) -> dict:
         "failure": None,
     }
 
+    used_fact_ids: set[str] = set()
+
     for relation in ("corroborate", "contradict", "reconcilable"):
-        edges = store.list_edges(relation=relation)
+        # Retrieve all edges of this type, sorted by confidence descending.
+        edges = sorted(
+            store.list_edges(relation=relation),
+            key=lambda e: e.confidence,
+            reverse=True,
+        )
+
+        best_slot: dict | None = None
+        fallback_slot: dict | None = None
+
         for edge in edges:
             slot = _build_case_slot(edge, store)
-            if slot is not None:
-                result[relation] = slot
-                break  # take first valid example
+            if slot is None:
+                continue
 
-    # Failure slot — lowest-confidence fact (or None if no facts)
+            overlaps = (
+                edge.fact_a_id in used_fact_ids
+                or edge.fact_b_id in used_fact_ids
+            )
+
+            if not overlaps:
+                # Ideal: highest-confidence edge with no fact overlap.
+                best_slot = slot
+                used_fact_ids.add(edge.fact_a_id)
+                used_fact_ids.add(edge.fact_b_id)
+                break
+            elif fallback_slot is None:
+                # Remember the highest-confidence edge even if it overlaps,
+                # in case we find no non-overlapping candidate.
+                fallback_slot = (slot, edge)
+
+        if best_slot is None and fallback_slot is not None:
+            # No non-overlapping edge found — use the highest-confidence one.
+            slot, edge = fallback_slot  # type: ignore[misc]
+            best_slot = slot
+            used_fact_ids.add(edge.fact_a_id)
+            used_fact_ids.add(edge.fact_b_id)
+
+        result[relation] = best_slot
+
+    # Failure slot — lowest-confidence fact not already used in relation slots
+    # (if all facts are used, fall back to absolute lowest-confidence fact).
     all_facts = store.all_facts()
     if all_facts:
-        lowest = min(all_facts, key=lambda f: f.confidence)
+        # Prefer a fact NOT already used in a relation slot.
+        unused_facts = [f for f in all_facts if f.id not in used_fact_ids]
+        candidate_pool = unused_facts if unused_facts else all_facts
+        lowest = min(candidate_pool, key=lambda f: f.confidence)
         result["failure"] = _fact_detail(lowest)
 
     return result

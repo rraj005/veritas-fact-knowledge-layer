@@ -179,3 +179,165 @@ def test_export_csv_edges(seeded_store: Store) -> None:
     assert len(lines) >= 2
     # Header should reference relation
     assert "relation" in lines[0].lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests for Fix 3 — distinct, highest-confidence examples across slots
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def shared_fact_store(tmp_path: Path) -> Store:
+    """Store where the same fact appears in both a corroborate and a
+    reconcilable edge, plus a cleaner alternative reconcilable edge.
+
+    Layout
+    ------
+    fact_shared  – appears in e_corr (corroborate, conf=0.95)
+                   AND e_rec_bad (reconcilable, conf=0.85)
+    fact_corr_b  – paired with fact_shared in e_corr
+    fact_rec_alt – paired with fact_rec_alt_b in e_rec_good (reconcilable, conf=0.75)
+    fact_rec_alt_b
+    fact_cont_a / fact_cont_b – contradict edge
+    fact_low_conf – lowest confidence, used for failure slot
+    """
+    s = Store(tmp_path / "shared.db")
+    s.init_schema()
+
+    doc = Document(new_id("doc"), "x.pdf", "hx", 2, "done", "2026-01-01T00:00:00")
+    s.upsert_document(doc)
+
+    def _f(attr: str, value: str = "1", conf: float = 0.8) -> Fact:
+        return Fact(
+            new_id("fact"),
+            doc.id,
+            "Company",
+            attr,
+            value,
+            "USD",
+            "FY24",
+            [],
+            f"{attr} {value}",
+            1,
+            f"{attr} is {value}",
+            "numerical",
+            conf,
+        )
+
+    fact_shared = _f("revenue", "100", conf=0.9)
+    fact_corr_b = _f("revenue", "100", conf=0.85)
+    fact_rec_alt = _f("gdp", "500", conf=0.78)
+    fact_rec_alt_b = _f("gdp", "510", conf=0.76)
+    fact_cont_a = _f("profit", "50", conf=0.88)
+    fact_cont_b = _f("profit", "200", conf=0.82)
+    fact_low_conf = _f("misc", "0", conf=0.05)
+
+    s.add_facts([
+        fact_shared, fact_corr_b, fact_rec_alt, fact_rec_alt_b,
+        fact_cont_a, fact_cont_b, fact_low_conf,
+    ])
+
+    # e_corr uses fact_shared (conf=0.95 — highest corroborate)
+    e_corr = Edge(new_id("edge"), fact_shared.id, fact_corr_b.id, "corroborate",
+                  "Same value", "none", 0.95)
+    # e_rec_bad also uses fact_shared → should be skipped when filling reconcilable
+    e_rec_bad = Edge(new_id("edge"), fact_shared.id, fact_rec_alt.id, "reconcilable",
+                     "Slight diff", "time", 0.85)
+    # e_rec_good uses fully distinct facts → should be preferred
+    e_rec_good = Edge(new_id("edge"), fact_rec_alt.id, fact_rec_alt_b.id, "reconcilable",
+                      "Slight diff", "scope", 0.75)
+    e_cont = Edge(new_id("edge"), fact_cont_a.id, fact_cont_b.id, "contradict",
+                  "Different values", "none", 0.88)
+
+    s.add_edges([e_corr, e_rec_bad, e_rec_good, e_cont])
+
+    # Expose IDs for assertions
+    s._test_fact_shared_id = fact_shared.id  # type: ignore[attr-defined]
+    s._test_e_rec_good_id = e_rec_good.id  # type: ignore[attr-defined]
+    s._test_fact_low_conf_id = fact_low_conf.id  # type: ignore[attr-defined]
+
+    return s
+
+
+def test_build_cases_distinct_fact_ids(shared_fact_store: Store) -> None:
+    """build_cases must NOT show the same fact_id in more than one relation slot."""
+    from veritas.cases import build_cases
+
+    result = build_cases(shared_fact_store)
+
+    used_ids: list[str] = []
+    for slot_name in ("corroborate", "contradict", "reconcilable"):
+        slot = result[slot_name]
+        if slot is not None:
+            used_ids.append(slot["fact_a"]["id"])
+            used_ids.append(slot["fact_b"]["id"])
+
+    # No duplicates across the three relation slots
+    assert len(used_ids) == len(set(used_ids)), (
+        f"Fact ids are not distinct across slots: {used_ids}"
+    )
+
+
+def test_build_cases_picks_non_overlapping_reconcilable(shared_fact_store: Store) -> None:
+    """When a fact is already used in the corroborate slot, build_cases must
+    pick the non-overlapping reconcilable edge (e_rec_good)."""
+    from veritas.cases import build_cases
+
+    result = build_cases(shared_fact_store)
+
+    rec = result["reconcilable"]
+    assert rec is not None
+    shared_id = shared_fact_store._test_fact_shared_id  # type: ignore[attr-defined]
+    # The shared fact must NOT appear in the reconcilable slot
+    assert rec["fact_a"]["id"] != shared_id
+    assert rec["fact_b"]["id"] != shared_id
+
+
+def test_build_cases_highest_confidence_per_type(tmp_path: Path) -> None:
+    """build_cases must pick the highest-confidence edge for each relation type."""
+    from veritas.cases import build_cases
+
+    s = Store(tmp_path / "conf.db")
+    s.init_schema()
+
+    doc = Document(new_id("doc"), "d.pdf", "hd", 1, "done", "2026-01-01T00:00:00")
+    s.upsert_document(doc)
+
+    def _f(attr: str, value: str = "1", conf: float = 0.5) -> Fact:
+        return Fact(
+            new_id("fact"), doc.id, "Subj", attr, value, "", "", [],
+            f"{attr} {value}", 1, f"{attr} is {value}", "numerical", conf,
+        )
+
+    # Three corroborate edges with different confidences; each uses distinct facts.
+    fa1, fb1 = _f("a", "1", 0.9), _f("a", "1", 0.9)
+    fa2, fb2 = _f("b", "2", 0.6), _f("b", "2", 0.6)
+    fa3, fb3 = _f("c", "3", 0.3), _f("c", "3", 0.3)
+
+    s.add_facts([fa1, fb1, fa2, fb2, fa3, fb3])
+
+    e_low = Edge(new_id("edge"), fa3.id, fb3.id, "corroborate", "r", "none", 0.3)
+    e_mid = Edge(new_id("edge"), fa2.id, fb2.id, "corroborate", "r", "none", 0.6)
+    e_high = Edge(new_id("edge"), fa1.id, fb1.id, "corroborate", "r", "none", 0.9)
+
+    s.add_edges([e_low, e_mid, e_high])
+
+    result = build_cases(s)
+
+    corr = result["corroborate"]
+    assert corr is not None
+    assert corr["edge"]["confidence"] == pytest.approx(0.9)
+
+
+def test_build_cases_failure_excludes_relation_facts(shared_fact_store: Store) -> None:
+    """The failure slot should not reuse facts already shown in relation slots
+    when unused facts are available."""
+    from veritas.cases import build_cases
+
+    result = build_cases(shared_fact_store)
+
+    failure = result["failure"]
+    # The lowest-confidence overall fact is fact_low_conf — which is NOT used
+    # in any relation slot, so it should appear in failure.
+    assert failure is not None
+    assert failure["id"] == shared_fact_store._test_fact_low_conf_id  # type: ignore[attr-defined]
