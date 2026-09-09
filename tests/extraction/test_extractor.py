@@ -192,3 +192,46 @@ def test_whitespace_collapsed_grounding() -> None:
     facts = extract_from_chunk(Chunk("d1", 1, text, 0, len(text)), FakeLLMClient([resp]))
     # Should be accepted since whitespace-collapsed form matches
     assert len(facts) == 1
+
+
+def _fact_row(evidence: str) -> dict:
+    return {
+        "subject": "X",
+        "attribute": "y",
+        "value": "1",
+        "unit": "",
+        "temporal_context": "",
+        "scope_qualifiers": [],
+        "evidence_span": evidence,
+        "claim_text": "c",
+        "fact_kind": "numerical",
+        "confidence": 0.9,
+    }
+
+
+def test_parses_markdown_fenced_array() -> None:
+    text = "Revenue was 100 crore."
+    body = json.dumps([_fact_row("Revenue was 100 crore")])
+    resp = f"```json\n{body}\n```"
+    facts = extract_from_chunk(Chunk("d1", 1, text, 0, len(text)), FakeLLMClient([resp]))
+    assert len(facts) == 1
+
+
+def test_parses_object_wrapped_facts() -> None:
+    text = "Revenue was 100 crore."
+    resp = json.dumps({"facts": [_fact_row("Revenue was 100 crore")]})
+    facts = extract_from_chunk(Chunk("d1", 1, text, 0, len(text)), FakeLLMClient([resp]))
+    assert len(facts) == 1
+
+
+def test_empty_response_yields_no_facts() -> None:
+    text = "Revenue was 100 crore."
+    facts = extract_from_chunk(Chunk("d1", 1, text, 0, len(text)), FakeLLMClient([""]))
+    assert facts == []
+
+
+def test_grounding_is_case_insensitive() -> None:
+    text = "Revenue was 100 CRORE in FY24."
+    resp = json.dumps([_fact_row("revenue was 100 crore in fy24")])
+    facts = extract_from_chunk(Chunk("d1", 1, text, 0, len(text)), FakeLLMClient([resp]))
+    assert len(facts) == 1

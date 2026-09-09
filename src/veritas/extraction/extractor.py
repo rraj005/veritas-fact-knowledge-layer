@@ -36,30 +36,62 @@ def _collapse_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _parse_json_array(response: str) -> list[dict]:
-    """Robustly extract the first JSON array from an LLM response string.
+def _strip_code_fences(response: str) -> str:
+    """Remove leading/trailing markdown code fences (```json ... ```)."""
+    text = response.strip()
+    if text.startswith("```"):
+        # drop the opening fence line (``` or ```json) and any closing fence
+        text = text.split("\n", 1)[-1] if "\n" in text else ""
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[: -3]
+    return text
 
-    The LLM may wrap the array in markdown fences or add preamble text.
-    We locate the first '[' and its matching ']' and parse that slice.
-    Returns an empty list if no valid array is found.
+
+def _parse_json_array(response: str) -> list[dict]:
+    """Robustly extract a JSON array of fact rows from an LLM response.
+
+    Handles bare arrays, markdown-fenced arrays, preamble text, and the common
+    case where a model returns an object like ``{"facts": [...]}`` instead of a
+    bare array. Returns an empty list if nothing parseable is found — and LOGS a
+    warning with a snippet so silent zero-fact runs are diagnosable.
     """
-    start = response.find("[")
-    if start == -1:
+    if not response or not response.strip():
+        logger.warning("LLM returned an empty response (no text).")
         return []
 
-    # Walk forward to find the matching closing bracket, respecting nesting.
-    depth = 0
-    for i, ch in enumerate(response[start:], start=start):
-        if ch == "[":
-            depth += 1
-        elif ch == "]":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(response[start : i + 1])
-                except json.JSONDecodeError as exc:
-                    logger.warning("JSON decode error in LLM response: %s", exc)
-                    return []
+    text = _strip_code_fences(response)
+
+    start = text.find("[")
+    if start != -1:
+        depth = 0
+        for i, ch in enumerate(text[start:], start=start):
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        parsed = json.loads(text[start : i + 1])
+                        if isinstance(parsed, list):
+                            return parsed
+                    except json.JSONDecodeError as exc:
+                        logger.warning("JSON decode error in LLM response: %s", exc)
+                    break
+
+    # Fallback: a JSON object whose value is the list of facts, e.g. {"facts": [...]}.
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            for value in obj.values():
+                if isinstance(value, list):
+                    return value
+    except json.JSONDecodeError:
+        pass
+
+    logger.warning(
+        "No JSON array of facts found in LLM response; first 300 chars: %r",
+        response[:300],
+    )
     return []
 
 
@@ -69,8 +101,10 @@ def _is_grounded(evidence_span: str, chunk_text: str) -> bool:
     """
     if not evidence_span:
         return False
-    collapsed_span = _collapse_whitespace(evidence_span)
-    collapsed_text = _collapse_whitespace(chunk_text)
+    # Case-insensitive so a model that changes capitalisation of the quoted
+    # span isn't dropped; still a real substring match (no paraphrase accepted).
+    collapsed_span = _collapse_whitespace(evidence_span).lower()
+    collapsed_text = _collapse_whitespace(chunk_text).lower()
     return collapsed_span in collapsed_text
 
 
